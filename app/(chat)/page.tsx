@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { unstable_noStore as noStore } from "next/cache";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { Chat } from "@/components/chat";
@@ -16,6 +17,9 @@ export default function Page() {
 }
 
 async function NewChatPage() {
+  // 标记为动态渲染，避免预渲染时 headers() 错误
+  noStore();
+  
   const session = await auth();
 
   if (!session) {

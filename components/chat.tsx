@@ -7,19 +7,12 @@ import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
+import { useConversationManager } from "@/hooks/use-conversation-manager";
+import { useMessagePersistence } from "@/hooks/use-message-persistence";
+import { useStreamChatWithRetry } from "@/hooks/use-stream-chat-with-retry";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -73,9 +66,12 @@ export function Chat({
 
   const [input, setInput] = useState<string>("");
   const [usage, setUsage] = useState<AppUsage | undefined>(initialLastContext);
-  const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [currentModelId, setCurrentModelId] = useState(initialChatModel);
   const currentModelIdRef = useRef(currentModelId);
+  const messagesRef = useRef<ChatMessage[]>(initialMessages);
+  
+  // 会话管理器
+  const conversationManager = useConversationManager(id);
 
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
@@ -89,7 +85,8 @@ export function Chat({
     stop,
     regenerate,
     resumeStream,
-  } = useChat<ChatMessage>({
+    isRetrying,
+  } = useStreamChatWithRetry<ChatMessage>({
     id,
     messages: initialMessages,
     experimental_throttle: 100,
@@ -114,26 +111,59 @@ export function Chat({
       if (dataPart.type === "data-usage") {
         setUsage(dataPart.data);
       }
+      // 更新对话状态为 streaming
+      conversationManager.updateStatus("streaming");
     },
     onFinish: () => {
+      // 流式响应完成
+      // 注意：消息保存已在服务器端（/api/chat/route.ts）处理
+      // 符合 AI SDK 最佳实践：在服务器端保存消息，客户端只负责显示
+      // 参考: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot/message-persistence
+      // 
+      // 客户端保存只作为兜底机制，在页面加载时通过 useMessagePersistence 检查恢复
+      
+      // 刷新聊天历史列表
       mutate(unstable_serialize(getChatHistoryPaginationKey));
+      // 更新对话状态为 idle
+      conversationManager.updateStatus("idle");
     },
     onError: (error) => {
+      // 更新对话状态为 idle（错误时）
+      conversationManager.updateStatus("idle");
       if (error instanceof ChatSDKError) {
-        // Check if it's a credit card error
-        if (
-          error.message?.includes("AI Gateway requires a valid credit card")
-        ) {
-          setShowCreditCardAlert(true);
-        } else {
-          toast({
-            type: "error",
-            description: error.message,
-          });
-        }
+        toast({
+          type: "error",
+          description: error.message,
+        });
       }
     },
   });
+
+  // 消息持久化 Hook（符合 AI SDK 规范）
+  // 注意：消息保存主要在服务器端处理，这里只用于页面加载时的恢复检查
+  const { saveAssistantMessages } = useMessagePersistence({
+    chatId: id,
+    messages,
+    onSaveComplete: (savedCount) => {
+      if (savedCount > 0) {
+        console.log(`[Chat] ✅ Restored ${savedCount} message(s) on page load`);
+      }
+    },
+  });
+
+  // 更新 messagesRef 以跟踪最新的消息列表
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // 检测 agent 切换并处理（放在 useStreamChatWithRetry 之后，以便访问 stop）
+  useEffect(() => {
+    const isSwitching = conversationManager.detectAgentSwitch(currentModelId);
+    if (isSwitching && status === "streaming") {
+      // Agent 切换时，如果正在流式传输，停止当前的流
+      stop();
+    }
+  }, [currentModelId, conversationManager, status, stop]);
 
   const searchParams = useSearchParams();
   const query = searchParams.get("query");
@@ -165,6 +195,9 @@ export function Chat({
     initialMessages,
     resumeStream,
     setMessages,
+    chatId: id,
+    currentAgentId: currentModelId,
+    conversationManager,
   });
 
   return (
@@ -227,36 +260,6 @@ export function Chat({
         stop={stop}
         votes={votes}
       />
-
-      <AlertDialog
-        onOpenChange={setShowCreditCardAlert}
-        open={showCreditCardAlert}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Activate AI Gateway</AlertDialogTitle>
-            <AlertDialogDescription>
-              This application requires{" "}
-              {process.env.NODE_ENV === "production" ? "the owner" : "you"} to
-              activate Vercel AI Gateway.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                window.open(
-                  "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card",
-                  "_blank"
-                );
-                window.location.href = "/";
-              }}
-            >
-              Activate
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }

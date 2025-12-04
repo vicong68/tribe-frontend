@@ -8,6 +8,7 @@ export const isTestEnvironment = Boolean(
     process.env.CI_PLAYWRIGHT
 );
 
-export const guestRegex = /^guest-\d+$/;
+// Guest 用户识别：支持旧的 guest-{timestamp} 格式和新的固定 guest-user@tribe.local 格式
+export const guestRegex = /^guest-\d+$|^guest-user@tribe\.local$/;
 
 export const DUMMY_PASSWORD = generateDummyPassword();

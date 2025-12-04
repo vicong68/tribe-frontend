@@ -30,19 +30,17 @@
   - Component primitives from [Radix UI](https://radix-ui.com) for accessibility and flexibility
 - Data Persistence
   - [Neon Serverless Postgres](https://vercel.com/marketplace/neon) for saving chat history and user data
-  - [Vercel Blob](https://vercel.com/storage/blob) for efficient file storage
+  - [MinIO](https://min.io) for self-hosted file storage (S3-compatible)
 - [Auth.js](https://authjs.dev)
   - Simple and secure authentication
 
 ## Model Providers
 
-This template uses the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) to access multiple AI models through a unified interface. The default configuration includes [xAI](https://x.ai) models (`grok-2-vision-1212`, `grok-3-mini`) routed through the gateway.
+This template uses the backend agno framework to access AI agents. All model calls are routed through the backend API at `/api/chat/stream`.
 
-### AI Gateway Authentication
+### Backend Agent Configuration
 
-**For Vercel deployments**: Authentication is handled automatically via OIDC tokens.
-
-**For non-Vercel deployments**: You need to provide an AI Gateway API key by setting the `AI_GATEWAY_API_KEY` environment variable in your `.env.local` file.
+The frontend connects to the backend API which provides access to various agents (司仪, 书吏, 猎手, etc.) through the agno framework. Configure the backend URL using the `NEXT_PUBLIC_BACKEND_URL` environment variable (default: `http://localhost:3000`).
 
 With the [AI SDK](https://ai-sdk.dev/docs/introduction), you can also switch to direct LLM providers like [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://ai-sdk.dev/providers/ai-sdk-providers) with just a few lines of code.
 

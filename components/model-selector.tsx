@@ -8,10 +8,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
-import { chatModels } from "@/lib/ai/models";
+import { useChatModels } from "@/lib/ai/models-client";
 import { cn } from "@/lib/utils";
 import { CheckCircleFillIcon, ChevronDownIcon } from "./icons";
 
@@ -28,19 +29,53 @@ export function ModelSelector({
     useOptimistic(selectedModelId);
 
   const userType = session.user.type;
+  const isLoggedIn = userType === "regular";
+  
+  // 从后端获取模型列表（登录用户包含用户列表）
+  const { models: chatModels } = useChatModels(isLoggedIn);
+
   const { availableChatModelIds } = entitlementsByUserType[userType];
 
-  const availableChatModels = chatModels.filter((chatModel) =>
-    availableChatModelIds.includes(chatModel.id)
-  );
+  // 调试日志
+  console.log("[ModelSelector] Debug info:", {
+    userType,
+    isLoggedIn,
+    chatModelsCount: chatModels.length,
+    chatModels: chatModels.map(m => ({ id: m.id, name: m.name, type: m.type })),
+    availableChatModelIds,
+  });
 
-  const selectedChatModel = useMemo(
-    () =>
-      availableChatModels.find(
-        (chatModel) => chatModel.id === optimisticModelId
-      ),
-    [optimisticModelId, availableChatModels]
-  );
+  // 分离 agents 和 users
+  const availableAgents = chatModels.filter((chatModel) => {
+    if (chatModel.type === "user") return false;
+    return availableChatModelIds.includes(chatModel.id);
+  });
+
+  const availableUsers = chatModels.filter((chatModel) => {
+    if (chatModel.type !== "user") return false;
+    // 登录用户可以看到所有用户（除了自己）
+    if (isLoggedIn) {
+      const currentUserId = session.user.memberId || session.user.email?.split("@")[0] || session.user.id;
+      return chatModel.id !== `user::${currentUserId}`;
+    }
+    return false;
+  });
+
+  // 调试日志
+  console.log("[ModelSelector] Filtered:", {
+    availableAgents: availableAgents.map(m => ({ id: m.id, name: m.name })),
+    availableUsers: availableUsers.map(m => ({ id: m.id, name: m.name, isOnline: m.isOnline })),
+  });
+
+  // 合并列表：agents 在前，users 在后
+  const availableChatModels = [...availableAgents, ...availableUsers];
+
+  const selectedChatModel = useMemo(() => {
+    // 查找选中的模型（可能是agent或user）
+    return availableChatModels.find(
+      (chatModel) => chatModel.id === optimisticModelId
+    ) || availableChatModels[0]; // 如果找不到，使用第一个
+  }, [optimisticModelId, availableChatModels]);
 
   return (
     <DropdownMenu onOpenChange={setOpen} open={open}>
@@ -64,42 +99,95 @@ export function ModelSelector({
         align="start"
         className="min-w-[280px] max-w-[90vw] sm:min-w-[300px]"
       >
-        {availableChatModels.map((chatModel) => {
-          const { id } = chatModel;
+        {availableAgents.length > 0 && (
+          <>
+            {availableAgents.map((chatModel) => {
+              const { id } = chatModel;
 
-          return (
-            <DropdownMenuItem
-              asChild
-              data-active={id === optimisticModelId}
-              data-testid={`model-selector-item-${id}`}
-              key={id}
-              onSelect={() => {
-                setOpen(false);
+              return (
+                <DropdownMenuItem
+                  asChild
+                  data-active={id === optimisticModelId}
+                  data-testid={`model-selector-item-${id}`}
+                  key={id}
+                  onSelect={() => {
+                    setOpen(false);
 
-                startTransition(() => {
-                  setOptimisticModelId(id);
-                  saveChatModelAsCookie(id);
-                });
-              }}
-            >
-              <button
-                className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
-                type="button"
-              >
-                <div className="flex flex-col items-start gap-1">
-                  <div className="text-sm sm:text-base">{chatModel.name}</div>
-                  <div className="line-clamp-2 text-muted-foreground text-xs">
-                    {chatModel.description}
-                  </div>
-                </div>
+                    startTransition(() => {
+                      setOptimisticModelId(id);
+                      saveChatModelAsCookie(id);
+                    });
+                  }}
+                >
+                  <button
+                    className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
+                    type="button"
+                  >
+                    <div className="flex flex-col items-start gap-1">
+                      <div className="text-sm sm:text-base">{chatModel.name}</div>
+                      {chatModel.description && (
+                        <div className="line-clamp-2 text-muted-foreground text-xs">
+                          {chatModel.description}
+                        </div>
+                      )}
+                    </div>
 
-                <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
-                  <CheckCircleFillIcon />
-                </div>
-              </button>
-            </DropdownMenuItem>
-          );
-        })}
+                    <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
+                      <CheckCircleFillIcon />
+                    </div>
+                  </button>
+                </DropdownMenuItem>
+              );
+            })}
+          </>
+        )}
+        
+        {availableUsers.length > 0 && (
+          <>
+            {availableAgents.length > 0 && <DropdownMenuSeparator />}
+            {availableUsers.map((chatModel) => {
+              const { id } = chatModel;
+
+              return (
+                <DropdownMenuItem
+                  asChild
+                  data-active={id === optimisticModelId}
+                  data-testid={`model-selector-item-${id}`}
+                  key={id}
+                  onSelect={() => {
+                    setOpen(false);
+
+                    startTransition(() => {
+                      setOptimisticModelId(id);
+                      saveChatModelAsCookie(id);
+                    });
+                  }}
+                >
+                  <button
+                    className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
+                    type="button"
+                  >
+                    <div className="flex flex-col items-start gap-1">
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm sm:text-base">{chatModel.name}</div>
+                        {chatModel.isOnline && (
+                          <span className="size-2 rounded-full bg-green-500" />
+                        )}
+                      </div>
+                      <div className="line-clamp-2 text-muted-foreground text-xs">
+                        用户
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
+                      <CheckCircleFillIcon />
+                    </div>
+                  </button>
+                </DropdownMenuItem>
+              );
+            })}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

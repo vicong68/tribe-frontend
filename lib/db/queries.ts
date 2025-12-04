@@ -38,9 +38,34 @@ import { generateHashedPassword } from "./utils";
 // use the Drizzle adapter for Auth.js / NextAuth
 // https://authjs.dev/reference/adapter/drizzle
 
+// 检查数据库连接配置
+if (!process.env.POSTGRES_URL) {
+  const errorMsg = "POSTGRES_URL environment variable is not set. Please check your .env.local file.";
+  console.error("[Database] ❌", errorMsg);
+  throw new Error(errorMsg);
+}
+
+// 移除 URL 中的 schema 参数（postgres.js 不支持），稍后通过 search_path 设置
+const dbUrl = process.env.POSTGRES_URL.replace(/\?schema=[^&]*/, "").replace(/&schema=[^&]*/, "");
+
 // biome-ignore lint: Forbidden non-null assertion.
-const client = postgres(process.env.POSTGRES_URL!);
-const db = drizzle(client);
+const client = postgres(dbUrl, {
+  // 设置默认 schema 为 ai
+  search_path: "ai",
+});
+
+const db = drizzle(client, { schema: undefined }); // Drizzle 会自动使用 search_path
+
+// 测试数据库连接（仅在开发环境）
+if (process.env.NODE_ENV === "development") {
+  client`SELECT 1`.catch((error) => {
+    console.error("[Database] ❌ Failed to connect to database:", error.message);
+    console.error("[Database] 💡 Make sure PostgreSQL is running:");
+    console.error("[Database]    sudo systemctl start postgresql");
+    console.error("[Database]    or");
+    console.error("[Database]    docker-compose up -d postgres");
+  });
+}
 
 export async function getUser(email: string): Promise<User[]> {
   try {
@@ -50,6 +75,16 @@ export async function getUser(email: string): Promise<User[]> {
       "bad_request:database",
       "Failed to get user by email"
     );
+  }
+}
+
+export async function getUserById(userId: string): Promise<User | null> {
+  try {
+    const users = await db.select().from(user).where(eq(user.id, userId)).limit(1);
+    return users[0] || null;
+  } catch (_error) {
+    console.error("[getUserById] Database error:", _error);
+    return null;
   }
 }
 
@@ -64,18 +99,43 @@ export async function createUser(email: string, password: string) {
 }
 
 export async function createGuestUser() {
-  const email = `guest-${Date.now()}`;
-  const password = generateHashedPassword(generateUUID());
-
+  // 使用固定的 guest 用户，避免每次访问都创建新用户
+  const GUEST_EMAIL = "guest-user@tribe.local";
+  
   try {
-    return await db.insert(user).values({ email, password }).returning({
+    // 先检查是否已存在固定的 guest 用户
+    const existingGuest = await db
+      .select()
+      .from(user)
+      .where(eq(user.email, GUEST_EMAIL))
+      .limit(1);
+    
+    if (existingGuest.length > 0) {
+      // 复用已存在的 guest 用户
+      return [
+        {
+          id: existingGuest[0].id,
+          email: existingGuest[0].email,
+        },
+      ];
+    }
+    
+    // 如果不存在，创建固定的 guest 用户
+    const password = generateHashedPassword(generateUUID());
+    return await db.insert(user).values({ email: GUEST_EMAIL, password }).returning({
       id: user.id,
       email: user.email,
     });
-  } catch (_error) {
+  } catch (error) {
+    // 记录详细的错误信息以便调试
+    console.error("[createGuestUser] Database error:", error);
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Failed to create guest user";
     throw new ChatSDKError(
       "bad_request:database",
-      "Failed to create guest user"
+      `Failed to create guest user: ${errorMessage}`
     );
   }
 }
@@ -91,6 +151,32 @@ export async function saveChat({
   title: string;
   visibility: VisibilityType;
 }) {
+  // 在保存前验证用户是否存在
+  const existingUser = await getUserById(userId);
+  if (!existingUser) {
+    console.warn("[saveChat] User not found, attempting to create/retrieve guest user:", userId);
+    // 尝试获取或创建 guest 用户
+    try {
+      const [guestUser] = await createGuestUser();
+      if (guestUser && guestUser.id) {
+        // 使用 guest 用户的 ID
+        console.info("[saveChat] Using guest user ID instead:", guestUser.id);
+        userId = guestUser.id;
+      } else {
+        throw new ChatSDKError(
+          "bad_request:database",
+          `用户不存在且无法创建 guest 用户: ${userId}`
+        );
+      }
+    } catch (guestError) {
+      console.error("[saveChat] Failed to create/retrieve guest user:", guestError);
+      throw new ChatSDKError(
+        "bad_request:database",
+        `用户不存在或无效: ${userId}`
+      );
+    }
+  }
+  
   try {
     return await db.insert(chat).values({
       id,
@@ -99,8 +185,37 @@ export async function saveChat({
       title,
       visibility,
     });
-  } catch (_error) {
-    throw new ChatSDKError("bad_request:database", "Failed to save chat");
+  } catch (error) {
+    // 记录详细的数据库错误信息
+    console.error("[saveChat] Database error:", {
+      error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : "Unknown",
+      chatId: id,
+      userId,
+      title,
+      visibility,
+    });
+    
+    // 检查是否是重复插入错误
+    if (error instanceof Error) {
+      if (error.message.includes("duplicate key") || error.message.includes("UNIQUE constraint")) {
+        console.warn("[saveChat] Chat already exists, skipping insert:", id);
+        // 如果聊天已存在，不抛出错误（可能是并发请求导致的）
+        return;
+      }
+      if (error.message.includes("foreign key") || error.message.includes("violates foreign key constraint")) {
+        throw new ChatSDKError(
+          "bad_request:database",
+          `用户不存在或无效: ${userId}`
+        );
+      }
+    }
+    
+    throw new ChatSDKError(
+      "bad_request:database",
+      `Failed to save chat: ${error instanceof Error ? error.message : "Unknown error"}`
+    );
   }
 }
 
@@ -222,10 +337,16 @@ export async function getChatsByUserId({
       chats: hasMore ? filteredChats.slice(0, limit) : filteredChats,
       hasMore,
     };
-  } catch (_error) {
+  } catch (error) {
+    // 记录原始错误信息以便调试
+    console.error("[getChatsByUserId] Database error:", error);
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Failed to get chats by user id";
     throw new ChatSDKError(
       "bad_request:database",
-      "Failed to get chats by user id"
+      errorMessage
     );
   }
 }
@@ -547,11 +668,16 @@ export async function getMessageCountByUserId({
       .execute();
 
     return stats?.count ?? 0;
-  } catch (_error) {
-    throw new ChatSDKError(
-      "bad_request:database",
-      "Failed to get message count by user id"
+  } catch (error) {
+    // 记录错误但不抛出，返回 0 以允许用户继续发送消息
+    // 限流检查失败不应该阻止用户使用系统
+    console.error("[getMessageCountByUserId] Database error:", error);
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown database error";
+    console.warn(
+      `[getMessageCountByUserId] Failed to get message count for user ${id}, returning 0. Error: ${errorMessage}`
     );
+    return 0; // 返回 0 而不是抛出错误，避免阻止用户发送消息
   }
 }
 

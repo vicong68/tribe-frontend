@@ -108,9 +108,32 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   }));
 }
 
+/**
+ * 将 UI 消息转换为数据库消息格式
+ * 用于保存消息到数据库
+ */
+export function convertToDBMessages(
+  messages: ChatMessage[],
+  chatId: string
+): DBMessage[] {
+  return messages.map((message) => ({
+    id: message.id,
+    chatId,
+    role: message.role,
+    parts: message.parts || [],
+    attachments: [],
+    createdAt: message.metadata?.createdAt
+      ? new Date(message.metadata.createdAt)
+      : new Date(),
+  }));
+}
+
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {
+  if (!message.parts || message.parts.length === 0) {
+    return '';
+  }
   return message.parts
     .filter((part) => part.type === 'text')
-    .map((part) => (part as { type: 'text'; text: string}).text)
+    .map((part) => (part as { type: 'text'; text: string}).text || '')
     .join('');
 }

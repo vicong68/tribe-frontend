@@ -13,7 +13,7 @@ export const Greeting = () => {
         initial={{ opacity: 0, y: 10 }}
         transition={{ delay: 0.5 }}
       >
-        Hello there!
+        您好！
       </motion.div>
       <motion.div
         animate={{ opacity: 1, y: 0 }}
@@ -22,7 +22,7 @@ export const Greeting = () => {
         initial={{ opacity: 0, y: 10 }}
         transition={{ delay: 0.6 }}
       >
-        How can I help you today?
+        今天我能为您做些什么？
       </motion.div>
     </div>
   );

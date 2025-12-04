@@ -4,7 +4,7 @@ import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
 import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import useSWRInfinite from "swr/infinite";
 import {
@@ -78,7 +78,7 @@ const groupChatsByDate = (chats: Chat[]): GroupedChats => {
 
 export function getChatHistoryPaginationKey(
   pageIndex: number,
-  previousPageData: ChatHistory
+  previousPageData: ChatHistory | null
 ) {
   if (previousPageData && previousPageData.hasMore === false) {
     return null;
@@ -86,6 +86,11 @@ export function getChatHistoryPaginationKey(
 
   if (pageIndex === 0) {
     return `/api/history?limit=${PAGE_SIZE}`;
+  }
+
+  // 处理 null 情况（第一页后没有数据）
+  if (!previousPageData) {
+    return null;
   }
 
   const firstChatFromPage = previousPageData.chats.at(-1);
@@ -101,15 +106,35 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
   const { id } = useParams();
 
+  // 创建一个条件函数，如果没有用户则返回 null
+  const getKey = useCallback(
+    (pageIndex: number, previousPageData: ChatHistory | null) => {
+      if (!user) {
+        return null; // 禁用请求
+      }
+      return getChatHistoryPaginationKey(pageIndex, previousPageData);
+    },
+    [user]
+  );
+
   const {
     data: paginatedChatHistories,
     setSize,
     isValidating,
     isLoading,
     mutate,
-  } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
-    fallbackData: [],
-  });
+    error,
+  } = useSWRInfinite<ChatHistory>(
+    getKey,
+    fetcher,
+    {
+      fallbackData: [],
+      // 即使请求失败，也使用空数据，避免侧边栏完全无法显示
+      onError: (err) => {
+        console.error("[SidebarHistory] Failed to load chat history:", err);
+      },
+    }
+  );
 
   const router = useRouter();
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -129,7 +154,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     });
 
     toast.promise(deletePromise, {
-      loading: "Deleting chat...",
+      loading: "正在删除对话...",
       success: () => {
         mutate((chatHistories) => {
           if (chatHistories) {
@@ -140,9 +165,9 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
           }
         });
 
-        return "Chat deleted successfully";
+        return "对话已成功删除";
       },
-      error: "Failed to delete chat",
+      error: "删除对话失败",
     });
 
     setShowDeleteDialog(false);
@@ -157,7 +182,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
       <SidebarGroup>
         <SidebarGroupContent>
           <div className="flex w-full flex-row items-center justify-center gap-2 px-2 text-sm text-zinc-500">
-            Login to save and revisit previous chats!
+            登录以保存和重新访问之前的对话！
           </div>
         </SidebarGroupContent>
       </SidebarGroup>
@@ -168,7 +193,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     return (
       <SidebarGroup>
         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
-          Today
+          今天
         </div>
         <SidebarGroupContent>
           <div className="flex flex-col">
@@ -198,7 +223,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
       <SidebarGroup>
         <SidebarGroupContent>
           <div className="flex w-full flex-row items-center justify-center gap-2 px-2 text-sm text-zinc-500">
-            Your conversations will appear here once you start chatting!
+            当您开始对话后，您的对话记录将显示在这里！
           </div>
         </SidebarGroupContent>
       </SidebarGroup>
@@ -223,7 +248,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                     {groupedChats.today.length > 0 && (
                       <div>
                         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
-                          Today
+                          今天
                         </div>
                         {groupedChats.today.map((chat) => (
                           <ChatItem
@@ -243,7 +268,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                     {groupedChats.yesterday.length > 0 && (
                       <div>
                         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
-                          Yesterday
+                          昨天
                         </div>
                         {groupedChats.yesterday.map((chat) => (
                           <ChatItem
@@ -263,7 +288,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                     {groupedChats.lastWeek.length > 0 && (
                       <div>
                         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
-                          Last 7 days
+                          最近7天
                         </div>
                         {groupedChats.lastWeek.map((chat) => (
                           <ChatItem
@@ -283,7 +308,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                     {groupedChats.lastMonth.length > 0 && (
                       <div>
                         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
-                          Last 30 days
+                          最近30天
                         </div>
                         {groupedChats.lastMonth.map((chat) => (
                           <ChatItem
@@ -303,7 +328,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                     {groupedChats.older.length > 0 && (
                       <div>
                         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
-                          Older than last month
+                          更早
                         </div>
                         {groupedChats.older.map((chat) => (
                           <ChatItem
@@ -334,14 +359,14 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
 
           {hasReachedEnd ? (
             <div className="mt-8 flex w-full flex-row items-center justify-center gap-2 px-2 text-sm text-zinc-500">
-              You have reached the end of your chat history.
+              已到达对话历史记录的末尾。
             </div>
           ) : (
             <div className="mt-8 flex flex-row items-center gap-2 p-2 text-zinc-500 dark:text-zinc-400">
               <div className="animate-spin">
                 <LoaderIcon />
               </div>
-              <div>Loading Chats...</div>
+              <div>加载对话中...</div>
             </div>
           )}
         </SidebarGroupContent>
@@ -350,16 +375,15 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
       <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogTitle>您确定吗？</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete your
-              chat and remove it from our servers.
+              此操作无法撤销。这将永久删除您的对话并从服务器中移除。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete}>
-              Continue
+              继续
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

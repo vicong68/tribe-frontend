@@ -16,11 +16,13 @@ import {
   useRef,
   useState,
 } from "react";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
-import { chatModels } from "@/lib/ai/models";
+import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { useChatModels } from "@/lib/ai/models-client";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { cn } from "@/lib/utils";
@@ -190,7 +192,7 @@ function PureMultimodalInput({
       const { error } = await response.json();
       toast.error(error);
     } catch (_error) {
-      toast.error("Failed to upload file, please try again!");
+      toast.error("文件上传失败，请重试！");
     }
   }, []);
 
@@ -267,7 +269,7 @@ function PureMultimodalInput({
         ]);
       } catch (error) {
         console.error("Error uploading pasted images:", error);
-        toast.error("Failed to upload pasted image(s)");
+        toast.error("粘贴图片上传失败");
       } finally {
         setUploadQueue([]);
       }
@@ -312,7 +314,7 @@ function PureMultimodalInput({
         onSubmit={(event) => {
           event.preventDefault();
           if (status !== "ready") {
-            toast.error("Please wait for the model to finish its response!");
+            toast.error("请等待模型完成回复！");
           } else {
             submitForm();
           }
@@ -360,7 +362,7 @@ function PureMultimodalInput({
             maxHeight={200}
             minHeight={44}
             onChange={handleInput}
-            placeholder="Send a message..."
+            placeholder="发送消息..."
             ref={textareaRef}
             rows={1}
             value={input}
@@ -458,19 +460,62 @@ function PureModelSelectorCompact({
   onModelChange?: (modelId: string) => void;
 }) {
   const [optimisticModelId, setOptimisticModelId] = useState(selectedModelId);
+  const { data: session } = useSession();
+  
+  const userType = session?.user?.type || "guest";
+  const isLoggedIn = userType === "regular";
+  
+  // 从后端获取模型列表（登录用户包含用户列表）
+  const { models: chatModels } = useChatModels(isLoggedIn);
+
+  // 调试日志
+  console.log("[ModelSelectorCompact] Debug info:", {
+    userType,
+    isLoggedIn,
+    chatModelsCount: chatModels.length,
+    chatModels: chatModels.map(m => ({ id: m.id, name: m.name, type: m.type })),
+  });
 
   useEffect(() => {
     setOptimisticModelId(selectedModelId);
   }, [selectedModelId]);
 
-  const selectedModel = chatModels.find(
+  const { availableChatModelIds } = entitlementsByUserType[userType];
+
+  // 分离 agents 和 users
+  const availableAgents = chatModels.filter((chatModel) => {
+    if (chatModel.type === "user") return false;
+    return availableChatModelIds.includes(chatModel.id);
+  });
+
+  const availableUsers = chatModels.filter((chatModel) => {
+    if (chatModel.type !== "user") return false;
+    // 登录用户可以看到所有用户（除了自己）
+    if (isLoggedIn && session?.user) {
+      const currentUserId = session.user.memberId || session.user.email?.split("@")[0] || session.user.id;
+      return chatModel.id !== `user::${currentUserId}`;
+    }
+    return false;
+  });
+
+  // 合并列表：agents 在前，users 在后
+  const allModels = [...availableAgents, ...availableUsers];
+
+  // 调试日志
+  console.log("[ModelSelectorCompact] Filtered:", {
+    availableAgents: availableAgents.map(m => ({ id: m.id, name: m.name })),
+    availableUsers: availableUsers.map(m => ({ id: m.id, name: m.name, isOnline: m.isOnline })),
+    allModels: allModels.map(m => ({ id: m.id, name: m.name, type: m.type })),
+  });
+
+  const selectedModel = allModels.find(
     (model) => model.id === optimisticModelId
-  );
+  ) || allModels[0];
 
   return (
     <PromptInputModelSelect
       onValueChange={(modelName) => {
-        const model = chatModels.find((m) => m.name === modelName);
+        const model = allModels.find((m) => m.name === modelName);
         if (model) {
           setOptimisticModelId(model.id);
           onModelChange?.(model.id);
@@ -492,14 +537,32 @@ function PureModelSelectorCompact({
       </Trigger>
       <PromptInputModelSelectContent className="min-w-[260px] p-0">
         <div className="flex flex-col gap-px">
-          {chatModels.map((model) => (
+          {availableAgents.map((model) => (
             <SelectItem key={model.id} value={model.name}>
               <div className="truncate font-medium text-xs">{model.name}</div>
               <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
-                {model.description}
+                {model.description || "智能体"}
               </div>
             </SelectItem>
           ))}
+          {availableUsers.length > 0 && (
+            <>
+              <div className="mx-2 my-1 h-px bg-border" />
+              {availableUsers.map((model) => (
+                <SelectItem key={model.id} value={model.name}>
+                  <div className="flex items-center gap-2">
+                    <div className="truncate font-medium text-xs">{model.name}</div>
+                    {model.isOnline && (
+                      <span className="size-2 shrink-0 rounded-full bg-green-500" />
+                    )}
+                  </div>
+                  <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
+                    用户
+                  </div>
+                </SelectItem>
+              ))}
+            </>
+          )}
         </div>
       </PromptInputModelSelectContent>
     </PromptInputModelSelect>

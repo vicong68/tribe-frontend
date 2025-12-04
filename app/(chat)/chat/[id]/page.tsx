@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { unstable_noStore as noStore } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 
@@ -18,6 +19,9 @@ export default function Page(props: { params: Promise<{ id: string }> }) {
 }
 
 async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
+  // 标记为动态渲染，避免预渲染时 headers() 错误
+  noStore();
+  
   const { id } = await params;
   const chat = await getChatById({ id });
 

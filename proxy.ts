@@ -24,7 +24,13 @@ export async function proxy(request: NextRequest) {
   });
 
   if (!token) {
-    const redirectUrl = encodeURIComponent(request.url);
+    // 避免重定向循环：如果当前路径已经是认证相关路径，直接重定向到首页
+    if (pathname.startsWith("/api/auth") || pathname === "/login" || pathname === "/register") {
+      return NextResponse.redirect(new URL("/api/auth/guest", request.url));
+    }
+    
+    // 构建重定向 URL，使用 pathname 而不是完整 URL，避免循环
+    const redirectUrl = encodeURIComponent(pathname);
 
     return NextResponse.redirect(
       new URL(`/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)

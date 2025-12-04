@@ -46,14 +46,14 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     });
 
     toast.promise(deletePromise, {
-      loading: "Deleting all chats...",
+      loading: "正在删除所有对话...",
       success: () => {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
         router.push("/");
         setShowDeleteAllDialog(false);
-        return "All chats deleted successfully";
+        return "所有对话已成功删除";
       },
-      error: "Failed to delete all chats",
+      error: "删除所有对话失败",
     });
   };
 
@@ -71,7 +71,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                 }}
               >
                 <span className="cursor-pointer rounded-md px-2 font-semibold text-lg hover:bg-muted">
-                  Chatbot
+                  Tribe-Agents
                 </span>
               </Link>
               <div className="flex flex-row gap-1">
@@ -88,7 +88,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent align="end" className="hidden md:block">
-                      Delete All Chats
+                      删除所有对话
                     </TooltipContent>
                   </Tooltip>
                 )}
@@ -108,7 +108,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent align="end" className="hidden md:block">
-                    New Chat
+                    新对话
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -127,16 +127,15 @@ export function AppSidebar({ user }: { user: User | undefined }) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete all chats?</AlertDialogTitle>
+            <AlertDialogTitle>删除所有对话？</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete all
-              your chats and remove them from our servers.
+              此操作无法撤销。这将永久删除您的所有对话并从服务器中移除。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteAll}>
-              Delete All
+              全部删除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

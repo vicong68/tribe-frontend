@@ -302,7 +302,7 @@ const SidebarRail = React.forwardRef<
 
   return (
     <button
-      aria-label="Toggle Sidebar"
+      aria-label="切换侧边栏"
       className={cn(
         "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex",
         "[[data-side=left]_&]:cursor-w-resize [[data-side=right]_&]:cursor-e-resize",
@@ -316,7 +316,7 @@ const SidebarRail = React.forwardRef<
       onClick={toggleSidebar}
       ref={ref}
       tabIndex={-1}
-      title="Toggle Sidebar"
+      title="切换侧边栏"
       {...props}
     />
   );

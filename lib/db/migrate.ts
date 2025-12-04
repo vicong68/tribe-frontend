@@ -12,7 +12,13 @@ const runMigrate = async () => {
     throw new Error("POSTGRES_URL is not defined");
   }
 
-  const connection = postgres(process.env.POSTGRES_URL, { max: 1 });
+  // 移除 URL 中的 schema 参数（postgres.js 不支持）
+  const dbUrl = process.env.POSTGRES_URL.replace(/\?schema=[^&]*/, "").replace(/&schema=[^&]*/, "");
+  
+  const connection = postgres(dbUrl, { 
+    max: 1,
+    search_path: "ai",
+  });
   const db = drizzle(connection);
 
   console.log("⏳ Running migrations...");

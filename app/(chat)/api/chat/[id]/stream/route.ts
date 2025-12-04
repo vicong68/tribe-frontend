@@ -9,7 +9,6 @@ import {
 import type { Chat } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
-import { getStreamContext } from "../../route";
 
 export async function GET(
   _: Request,
@@ -17,12 +16,7 @@ export async function GET(
 ) {
   const { id: chatId } = await params;
 
-  const streamContext = getStreamContext();
   const resumeRequestedAt = new Date();
-
-  if (!streamContext) {
-    return new Response(null, { status: 204 });
-  }
 
   if (!chatId) {
     return new ChatSDKError("bad_request:api").toResponse();
@@ -52,24 +46,32 @@ export async function GET(
 
   const streamIds = await getStreamIdsByChatId({ chatId });
 
-  if (!streamIds.length) {
-    return new ChatSDKError("not_found:stream").toResponse();
-  }
-
-  const recentStreamId = streamIds.at(-1);
-
-  if (!recentStreamId) {
-    return new ChatSDKError("not_found:stream").toResponse();
-  }
-
+  // 创建空流（用于没有流或流已结束的情况）
   const emptyDataStream = createUIMessageStream<ChatMessage>({
     // biome-ignore lint/suspicious/noEmptyBlockStatements: "Needs to exist"
     execute: () => {},
   });
 
-  const stream = await streamContext.resumableStream(recentStreamId, () =>
-    emptyDataStream.pipeThrough(new JsonToSseTransformStream())
-  );
+  // 如果没有流 ID，返回空流而不是错误（切换 agent 时可能还没有流）
+  if (!streamIds.length) {
+    return new Response(
+      emptyDataStream.pipeThrough(new JsonToSseTransformStream()),
+      { status: 200 }
+    );
+  }
+
+  const recentStreamId = streamIds.at(-1);
+
+  if (!recentStreamId) {
+    return new Response(
+      emptyDataStream.pipeThrough(new JsonToSseTransformStream()),
+      { status: 200 }
+    );
+  }
+
+  // 注意：当前实现不使用 resumable stream，直接返回空流
+  // 如果需要恢复流功能，需要配置 resumable-stream 并创建 stream context
+  const stream = emptyDataStream.pipeThrough(new JsonToSseTransformStream());
 
   /*
    * For when the generation is streaming during SSR

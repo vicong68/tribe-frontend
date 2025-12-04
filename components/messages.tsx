@@ -84,7 +84,7 @@ function PureMessages({
       </div>
 
       <button
-        aria-label="Scroll to bottom"
+        aria-label="滚动到底部"
         className={`-translate-x-1/2 absolute bottom-4 left-1/2 z-10 rounded-full border bg-background p-2 shadow-lg transition-all hover:bg-muted ${
           isAtBottom
             ? "pointer-events-none scale-0 opacity-0"

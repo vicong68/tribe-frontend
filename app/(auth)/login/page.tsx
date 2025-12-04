@@ -30,12 +30,12 @@ export default function Page() {
     if (state.status === "failed") {
       toast({
         type: "error",
-        description: "Invalid credentials!",
+        description: "凭据无效！",
       });
     } else if (state.status === "invalid_data") {
       toast({
         type: "error",
-        description: "Failed validating your submission!",
+        description: "提交验证失败！",
       });
     } else if (state.status === "success") {
       setIsSuccessful(true);
@@ -53,22 +53,22 @@ export default function Page() {
     <div className="flex h-dvh w-screen items-start justify-center bg-background pt-12 md:items-center md:pt-0">
       <div className="flex w-full max-w-md flex-col gap-12 overflow-hidden rounded-2xl">
         <div className="flex flex-col items-center justify-center gap-2 px-4 text-center sm:px-16">
-          <h3 className="font-semibold text-xl dark:text-zinc-50">Sign In</h3>
+          <h3 className="font-semibold text-xl dark:text-zinc-50">登录</h3>
           <p className="text-gray-500 text-sm dark:text-zinc-400">
-            Use your email and password to sign in
+            使用您的邮箱和密码登录
           </p>
         </div>
         <AuthForm action={handleSubmit} defaultEmail={email}>
-          <SubmitButton isSuccessful={isSuccessful}>Sign in</SubmitButton>
+          <SubmitButton isSuccessful={isSuccessful}>登录</SubmitButton>
           <p className="mt-4 text-center text-gray-600 text-sm dark:text-zinc-400">
-            {"Don't have an account? "}
+            {"还没有账号？"}
             <Link
               className="font-semibold text-gray-800 hover:underline dark:text-zinc-200"
               href="/register"
             >
-              Sign up
+              注册
             </Link>
-            {" for free."}
+            {"免费账号。"}
           </p>
         </AuthForm>
       </div>

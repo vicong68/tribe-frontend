@@ -147,7 +147,7 @@ export const WebPreviewUrl = ({
       className="h-8 flex-1 text-sm"
       onChange={onChange}
       onKeyDown={handleKeyDown}
-      placeholder="Enter URL..."
+      placeholder="输入网址..."
       value={value ?? url}
       {...props}
     />
@@ -172,7 +172,7 @@ export const WebPreviewBody = ({
         className={cn("size-full", className)}
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
         src={(src ?? url) || undefined}
-        title="Preview"
+        title="预览"
         {...props}
       />
       {loading}

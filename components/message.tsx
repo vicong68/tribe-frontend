@@ -191,7 +191,7 @@ const PurePreviewMessage = ({
                     className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-500 dark:bg-red-950/50"
                     key={toolCallId}
                   >
-                    Error creating document: {String(part.output.error)}
+                    创建文档时出错：{String(part.output.error)}
                   </div>
                 );
               }
@@ -214,7 +214,7 @@ const PurePreviewMessage = ({
                     className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-500 dark:bg-red-950/50"
                     key={toolCallId}
                   >
-                    Error updating document: {String(part.output.error)}
+                    更新文档时出错：{String(part.output.error)}
                   </div>
                 );
               }
@@ -246,7 +246,7 @@ const PurePreviewMessage = ({
                         output={
                           "error" in part.output ? (
                             <div className="rounded border p-2 text-red-500">
-                              Error: {String(part.output.error)}
+                              错误：{String(part.output.error)}
                             </div>
                           ) : (
                             <DocumentToolResult
@@ -321,7 +321,7 @@ export const ThinkingMessage = () => {
 
         <div className="flex w-full flex-col gap-2 md:gap-4">
           <div className="flex items-center gap-1 p-0 text-muted-foreground text-sm">
-            <span className="animate-pulse">Thinking</span>
+            <span className="animate-pulse">思考中</span>
             <span className="inline-flex">
               <span className="animate-bounce [animation-delay:0ms]">.</span>
               <span className="animate-bounce [animation-delay:150ms]">.</span>
