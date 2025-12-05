@@ -51,6 +51,16 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
 
   const uiMessages = convertToUIMessages(messagesFromDb);
 
+  // 诊断日志：检查消息加载
+  console.log(`[ChatPage] 对话 ${id} 消息加载诊断:`, {
+    totalMessages: messagesFromDb.length,
+    userMessages: messagesFromDb.filter((m) => m.role === "user").length,
+    assistantMessages: messagesFromDb.filter((m) => m.role === "assistant").length,
+    uiMessagesCount: uiMessages.length,
+    uiUserMessages: uiMessages.filter((m) => m.role === "user").length,
+    uiAssistantMessages: uiMessages.filter((m) => m.role === "assistant").length,
+  });
+
   const cookieStore = await cookies();
   const chatModelFromCookie = cookieStore.get("chat-model");
 

@@ -39,6 +39,21 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
 
   // 确保 initialMessages 被正确使用
   // useChat 的 messages 参数在初始化时使用，后续通过内部状态管理
+  
+  // 诊断日志：检查传入的 messages
+  useEffect(() => {
+    console.log(`[useStreamChatWithRetry] 初始化 - 对话 ${options.id}:`, {
+      messagesCount: options.messages?.length || 0,
+      userMessages: options.messages?.filter((m) => m.role === "user").length || 0,
+      assistantMessages: options.messages?.filter((m) => m.role === "assistant").length || 0,
+      messages: options.messages?.map((m) => ({
+        id: m.id,
+        role: m.role,
+        partsCount: m.parts?.length || 0,
+      })),
+    });
+  }, [options.id, options.messages]);
+  
   const chat = useChat<T>({
     ...options,
     // 确保 messages 参数被正确传递
@@ -109,6 +124,20 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
     },
   });
 
+  // 诊断日志：检查 useChat 返回的 messages
+  useEffect(() => {
+    console.log(`[useStreamChatWithRetry] useChat 返回的 messages - 对话 ${options.id}:`, {
+      messagesCount: chat.messages.length,
+      userMessages: chat.messages.filter((m) => m.role === "user").length,
+      assistantMessages: chat.messages.filter((m) => m.role === "assistant").length,
+      messages: chat.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        partsCount: m.parts?.length || 0,
+      })),
+    });
+  }, [options.id, chat.messages]);
+  
   // 保存最后一条消息，用于重试
   useEffect(() => {
     if (chat.messages.length > 0) {

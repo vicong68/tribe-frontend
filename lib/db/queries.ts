@@ -367,8 +367,29 @@ export async function getChatById({ id }: { id: string }) {
 export async function saveMessages({ messages }: { messages: DBMessage[] }) {
   try {
     return await db.insert(message).values(messages);
-  } catch (_error) {
-    throw new ChatSDKError("bad_request:database", "Failed to save messages");
+  } catch (error) {
+    // 输出详细错误信息以便调试
+    console.error("[saveMessages] Database error details:", {
+      error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : "Unknown",
+      stack: error instanceof Error ? error.stack : undefined,
+      messagesCount: messages.length,
+      firstMessage: messages[0] ? {
+        id: messages[0].id,
+        chatId: messages[0].chatId,
+        role: messages[0].role,
+        hasParts: !!messages[0].parts,
+        hasAttachments: !!messages[0].attachments,
+        hasMetadata: !!(messages[0] as any).metadata,
+        partsType: typeof messages[0].parts,
+        attachmentsType: typeof messages[0].attachments,
+      } : null,
+    });
+    throw new ChatSDKError(
+      "bad_request:database",
+      `Failed to save messages: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 

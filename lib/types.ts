@@ -12,6 +12,13 @@ export type DataPart = { type: "append-message"; message: string };
 
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
+  // 扩展字段：支持多用户和Agent通信
+  senderName: z.string().optional(),
+  receiverName: z.string().optional(),
+  senderId: z.string().optional(),
+  receiverId: z.string().optional(),
+  communicationType: z.enum(["user_agent", "user_user", "agent_agent"]).optional(),
+  agentUsed: z.string().optional(), // Agent名称（用于user_agent类型）
 });
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;

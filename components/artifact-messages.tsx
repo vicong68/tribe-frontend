@@ -1,7 +1,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { AnimatePresence, motion } from "framer-motion";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -38,21 +38,31 @@ function PureArtifactMessages({
     status,
   });
 
+  // 去重消息列表：保留最后一条重复的消息（基于 message.id）
+  // 这可以防止重试或流式响应时产生的重复消息导致 React key 警告
+  const uniqueMessages = useMemo(() => {
+    const seen = new Map<string, ChatMessage>();
+    for (const message of messages) {
+      seen.set(message.id, message);
+    }
+    return Array.from(seen.values());
+  }, [messages]);
+
   return (
     <div
       className="flex h-full flex-col items-center gap-4 overflow-y-scroll px-4 pt-20"
       ref={messagesContainerRef}
     >
-      {messages.map((message, index) => (
+      {uniqueMessages.map((message, index) => (
         <PreviewMessage
           chatId={chatId}
-          isLoading={status === "streaming" && index === messages.length - 1}
+          isLoading={status === "streaming" && index === uniqueMessages.length - 1}
           isReadonly={isReadonly}
           key={message.id}
           message={message}
           regenerate={regenerate}
           requiresScrollPadding={
-            hasSentMessage && index === messages.length - 1
+            hasSentMessage && index === uniqueMessages.length - 1
           }
           setMessages={setMessages}
           vote={

@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 export const Greeting = () => {
   return (
     <div
-      className="mx-auto mt-4 flex size-full max-w-3xl flex-col justify-center px-4 md:mt-16 md:px-8"
+      className="mx-auto mt-4 flex size-full max-w-4xl flex-col justify-center px-2 md:mt-16 md:px-4"
       key="overview"
     >
       <motion.div

@@ -63,6 +63,15 @@ export function generateUUID(): string {
   });
 }
 
+/**
+ * 验证字符串是否为有效的 UUID 格式
+ * UUID 格式：xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+ */
+export function isValidUUID(id: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(id);
+}
+
 type ResponseMessageWithoutId = CoreToolMessage | CoreAssistantMessage;
 type ResponseMessage = ResponseMessageWithoutId & { id: string };
 
@@ -98,12 +107,16 @@ export function sanitizeText(text: string) {
 }
 
 export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
+  // 标准格式转换：直接转换数据库消息为 UI 消息格式
+  // 所有消息都应该有完整的 metadata（无 metadata 的消息已在数据库层面清理）
   return messages.map((message) => ({
     id: message.id,
     role: message.role as 'user' | 'assistant' | 'system',
     parts: message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[],
     metadata: {
       createdAt: formatISO(message.createdAt),
+      // 合并数据库中的 metadata（所有消息都应该有完整的 metadata）
+      ...(message.metadata || {}),
     },
   }));
 }
@@ -111,21 +124,36 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
 /**
  * 将 UI 消息转换为数据库消息格式
  * 用于保存消息到数据库
+ * 注意：如果消息 ID 不是有效的 UUID 格式，会生成新的 UUID 并保存原始 ID 到 metadata
  */
 export function convertToDBMessages(
   messages: ChatMessage[],
   chatId: string
 ): DBMessage[] {
-  return messages.map((message) => ({
-    id: message.id,
-    chatId,
-    role: message.role,
-    parts: message.parts || [],
-    attachments: [],
-    createdAt: message.metadata?.createdAt
-      ? new Date(message.metadata.createdAt)
-      : new Date(),
-  }));
+  return messages.map((message) => {
+    // 检查消息 ID 是否为有效的 UUID 格式
+    let dbMessageId = message.id;
+    const metadata = { ...(message.metadata || {}) };
+    
+    if (!isValidUUID(message.id)) {
+      // 生成新的 UUID 作为数据库 ID
+      dbMessageId = generateUUID();
+      // 将原始 ID 保存在 metadata 中，以便追踪
+      metadata.originalMessageId = message.id;
+    }
+    
+    return {
+      id: dbMessageId, // 使用有效的 UUID
+      chatId,
+      role: message.role,
+      parts: message.parts || [],
+      attachments: [],
+      metadata: metadata,
+      createdAt: message.metadata?.createdAt
+        ? new Date(message.metadata.createdAt)
+        : new Date(),
+    };
+  });
 }
 
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {

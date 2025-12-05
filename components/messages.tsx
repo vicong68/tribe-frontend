@@ -1,7 +1,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { ArrowDownIcon } from "lucide-react";
-import { memo } from "react";
+import { memo, useMemo, useEffect } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -29,7 +29,7 @@ function PureMessages({
   setMessages,
   regenerate,
   isReadonly,
-  selectedModelId: _selectedModelId,
+  selectedModelId,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -43,20 +43,87 @@ function PureMessages({
 
   useDataStream();
 
+  // 去重消息列表：保留最后一条重复的消息（基于 message.id）
+  // 这可以防止重试或流式响应时产生的重复消息导致 React key 警告
+  // 同时过滤掉空消息（parts 为空或没有有效内容）
+  const uniqueMessages = useMemo(() => {
+    const seen = new Map<string, ChatMessage>();
+    for (const message of messages) {
+      seen.set(message.id, message);
+    }
+    const result = Array.from(seen.values());
+    
+    // 过滤空消息：parts 为空或没有有效的文本内容
+    const filteredMessages = result.filter((message) => {
+      const parts = message.parts || [];
+      // 检查是否有有效的文本内容
+      const hasValidText = parts.some(
+        (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+      );
+      // 检查是否有文件附件
+      const hasAttachments = parts.some((p) => p.type === "file");
+      // 检查是否有其他有效内容（reasoning、tool 等）
+      const hasOtherContent = parts.some(
+        (p) => p.type !== "text" && p.type !== "file"
+      );
+      
+      // 保留有有效内容的消息
+      return hasValidText || hasAttachments || hasOtherContent;
+    });
+    
+    // 诊断日志：检查消息去重和过滤
+    if (messages.length !== filteredMessages.length) {
+      const removedCount = result.length - filteredMessages.length;
+      console.log(`[Messages] 消息处理 - 对话 ${chatId}:`, {
+        originalCount: messages.length,
+        afterDedupe: result.length,
+        afterFilter: filteredMessages.length,
+        removedEmpty: removedCount,
+        userMessages: filteredMessages.filter((m) => m.role === "user").length,
+        assistantMessages: filteredMessages.filter((m) => m.role === "assistant").length,
+        emptyMessages: result.filter((m) => {
+          const parts = m.parts || [];
+          const hasValidText = parts.some(
+            (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+          );
+          const hasAttachments = parts.some((p) => p.type === "file");
+          return !hasValidText && !hasAttachments;
+        }).map((m) => ({ id: m.id, role: m.role, partsCount: m.parts?.length || 0 })),
+      });
+    }
+    
+    return filteredMessages;
+  }, [messages, chatId]);
+  
+  // 诊断日志：检查最终显示的消息
+  useEffect(() => {
+    console.log(`[Messages] 最终显示的消息 - 对话 ${chatId}:`, {
+      totalMessages: uniqueMessages.length,
+      userMessages: uniqueMessages.filter((m) => m.role === "user").length,
+      assistantMessages: uniqueMessages.filter((m) => m.role === "assistant").length,
+      messages: uniqueMessages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        partsCount: m.parts?.length || 0,
+        hasText: m.parts?.some((p) => p.type === "text" && (p as any).text) || false,
+      })),
+    });
+  }, [chatId, uniqueMessages]);
+
   return (
     <div className="relative flex-1">
       <div
         className="absolute inset-0 touch-pan-y overflow-y-auto"
         ref={messagesContainerRef}
       >
-        <div className="mx-auto flex min-w-0 max-w-4xl flex-col gap-4 px-2 py-4 md:gap-6 md:px-4">
-          {messages.length === 0 && <Greeting />}
+        <div className="flex min-w-0 flex-col gap-4 py-4 md:gap-6">
+          {uniqueMessages.length === 0 && <Greeting />}
 
-          {messages.map((message, index) => (
+          {uniqueMessages.map((message, index) => (
             <PreviewMessage
               chatId={chatId}
               isLoading={
-                status === "streaming" && messages.length - 1 === index
+                status === "streaming" && uniqueMessages.length - 1 === index
               }
               isReadonly={isReadonly}
               key={message.id}
@@ -65,6 +132,7 @@ function PureMessages({
               requiresScrollPadding={
                 hasSentMessage && index === messages.length - 1
               }
+              selectedModelId={selectedModelId}
               setMessages={setMessages}
               vote={
                 votes
@@ -74,7 +142,13 @@ function PureMessages({
             />
           ))}
 
-          {status === "submitted" && <ThinkingMessage />}
+          {/* 仅在等待agent回复时显示思考消息（不显示远端用户消息的等待） */}
+          {status === "submitted" && (
+            <ThinkingMessage 
+              agentName={selectedModelId} 
+              selectedModelId={selectedModelId}
+            />
+          )}
 
           <div
             className="min-h-[24px] min-w-[24px] shrink-0"

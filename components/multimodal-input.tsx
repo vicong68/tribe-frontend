@@ -23,6 +23,7 @@ import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { useChatModels } from "@/lib/ai/models-client";
+import { getAvatarInfo, preloadAvatars } from "@/lib/avatar-utils";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,8 @@ import {
   ChevronDownIcon,
   CpuIcon,
   PaperclipIcon,
+  BotIcon,
+  UserIcon,
   StopIcon,
 } from "./icons";
 import { PreviewAttachment } from "./preview-attachment";
@@ -130,9 +133,13 @@ function PureMultimodalInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
+  const { data: session } = useSession();
+  const { models: chatModels } = useChatModels(session?.user?.type === "regular");
+  
   const submitForm = useCallback(() => {
     window.history.pushState({}, "", `/chat/${chatId}`);
 
+    // 发送消息（useChat 会立即将消息添加到 messages 列表）
     sendMessage({
       role: "user",
       parts: [
@@ -147,6 +154,59 @@ function PureMultimodalInput({
           text: input,
         },
       ],
+    });
+
+    // 立即更新最后一条用户消息的 metadata（确保立即显示 @receiverName）
+    // 注意：useChat 会立即添加消息，我们需要在下一个 tick 更新 metadata
+    // 使用 requestAnimationFrame 确保在下一个渲染周期更新，避免覆盖消息
+    requestAnimationFrame(() => {
+      setMessages((prevMessages) => {
+        if (prevMessages.length === 0) return prevMessages;
+        
+        // 查找最后一条用户消息（可能不是最后一条，因为可能有其他消息）
+        let lastUserMessageIndex = -1;
+        for (let i = prevMessages.length - 1; i >= 0; i--) {
+          if (prevMessages[i].role === "user") {
+            lastUserMessageIndex = i;
+            break;
+          }
+        }
+        
+        if (lastUserMessageIndex === -1) return prevMessages;
+        
+        const lastUserMessage = prevMessages[lastUserMessageIndex];
+        
+        // 如果消息已经有 metadata，合并而不是覆盖
+        const existingMetadata = lastUserMessage.metadata || {};
+        
+        // 从 selectedModelId 获取 receiverName
+        const selectedChatModel = chatModels.find((m) => m.id === selectedModelId);
+        const receiverName = selectedChatModel?.name || selectedModelId;
+        
+        // 构建临时 metadata（服务器端会发送完整的 metadata）
+        const tempMetadata: Record<string, any> = {
+          ...existingMetadata, // 保留现有 metadata
+          createdAt: existingMetadata.createdAt || new Date().toISOString(),
+          senderId: existingMetadata.senderId || session?.user?.memberId || session?.user?.email?.split("@")[0] || session?.user?.id || "guest_user",
+          senderName: existingMetadata.senderName || session?.user?.email?.split("@")[0] || "我",
+          receiverId: existingMetadata.receiverId || selectedModelId,
+          receiverName: existingMetadata.receiverName || receiverName,
+          communicationType: existingMetadata.communicationType || (selectedChatModel?.type === "user" ? "user_user" : "user_agent"),
+        };
+        
+        if (selectedChatModel?.type !== "user") {
+          tempMetadata.agentUsed = existingMetadata.agentUsed || selectedModelId;
+        }
+        
+        // 更新最后一条用户消息的 metadata
+        const updatedMessages = [...prevMessages];
+        updatedMessages[lastUserMessageIndex] = {
+          ...lastUserMessage,
+          metadata: tempMetadata,
+        };
+        
+        return updatedMessages;
+      });
     });
 
     setAttachments([]);
@@ -164,9 +224,13 @@ function PureMultimodalInput({
     sendMessage,
     setAttachments,
     setLocalStorageInput,
+    setMessages,
     width,
     chatId,
     resetHeight,
+    selectedModelId,
+    chatModels,
+    session,
   ]);
 
   const uploadFile = useCallback(async (file: File) => {
@@ -468,13 +532,26 @@ function PureModelSelectorCompact({
   // 从后端获取模型列表（登录用户包含用户列表）
   const { models: chatModels } = useChatModels(isLoggedIn);
 
-  // 调试日志
-  console.log("[ModelSelectorCompact] Debug info:", {
-    userType,
-    isLoggedIn,
-    chatModelsCount: chatModels.length,
-    chatModels: chatModels.map(m => ({ id: m.id, name: m.name, type: m.type })),
-  });
+  // 调试日志（仅在开发环境且关键状态变化时输出，减少日志噪音）
+  const prevStateRef = useRef<{ userType?: string; isLoggedIn?: boolean; chatModelsCount?: number }>({});
+  useEffect(() => {
+    if (process.env.NODE_ENV === "development") {
+      const prevState = prevStateRef.current;
+      // 仅在关键状态变化时输出日志
+      if (
+        prevState.userType !== userType ||
+        prevState.isLoggedIn !== isLoggedIn ||
+        (prevState.chatModelsCount === 0 && chatModels.length > 0)
+      ) {
+        console.log("[ModelSelectorCompact] State changed:", {
+          userType,
+          isLoggedIn,
+          chatModelsCount: chatModels.length,
+        });
+        prevStateRef.current = { userType, isLoggedIn, chatModelsCount: chatModels.length };
+      }
+    }
+  }, [userType, isLoggedIn, chatModels.length]);
 
   useEffect(() => {
     setOptimisticModelId(selectedModelId);
@@ -500,17 +577,17 @@ function PureModelSelectorCompact({
 
   // 合并列表：agents 在前，users 在后
   const allModels = [...availableAgents, ...availableUsers];
+  
+  // 预加载所有模型的头像信息（使用 chatModels 作为依赖，避免 allModels 变化导致重复计算）
+  const modelsWithAvatars = useMemo(() => {
+    return preloadAvatars(allModels);
+  }, [chatModels.length, availableAgents.length, availableUsers.length]);
 
-  // 调试日志
-  console.log("[ModelSelectorCompact] Filtered:", {
-    availableAgents: availableAgents.map(m => ({ id: m.id, name: m.name })),
-    availableUsers: availableUsers.map(m => ({ id: m.id, name: m.name, isOnline: m.isOnline })),
-    allModels: allModels.map(m => ({ id: m.id, name: m.name, type: m.type })),
-  });
+  // 移除 Filtered 日志（减少日志噪音，仅在需要调试时手动添加）
 
-  const selectedModel = allModels.find(
+  const selectedModel = modelsWithAvatars.find(
     (model) => model.id === optimisticModelId
-  ) || allModels[0];
+  ) || modelsWithAvatars[0];
 
   return (
     <PromptInputModelSelect
@@ -528,7 +605,20 @@ function PureModelSelectorCompact({
     >
       <Trigger asChild>
         <Button className="h-8 px-2" variant="ghost">
-          <CpuIcon size={16} />
+          {selectedModel && (
+            <div
+              className="mr-1.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
+              style={{
+                color: "#3B82F6",
+              }}
+            >
+              {selectedModel.avatar.isAgent ? (
+                <BotIcon variant={selectedModel.avatar.iconVariant} />
+              ) : (
+                <UserIcon variant={selectedModel.avatar.iconVariant} />
+              )}
+            </div>
+          )}
           <span className="hidden font-medium text-xs sm:block">
             {selectedModel?.name}
           </span>
@@ -537,30 +627,58 @@ function PureModelSelectorCompact({
       </Trigger>
       <PromptInputModelSelectContent className="min-w-[260px] p-0">
         <div className="flex flex-col gap-px">
-          {availableAgents.map((model) => (
-            <SelectItem key={model.id} value={model.name}>
-              <div className="truncate font-medium text-xs">{model.name}</div>
-              <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
-                {model.description || "智能体"}
-              </div>
-            </SelectItem>
-          ))}
-          {availableUsers.length > 0 && (
+          {modelsWithAvatars
+            .filter((m) => m.type === "agent")
+            .map((model) => (
+              <SelectItem key={model.id} value={model.name}>
+                <div className="flex items-center gap-2">
+                  <div
+                    className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
+                    style={{
+                      color: "#3B82F6",
+                    }}
+                  >
+                    <BotIcon variant={model.avatar.iconVariant} />
+                  </div>
+                  <div className="flex flex-col">
+                    <div className="truncate font-medium text-xs">{model.name}</div>
+                    <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
+                      {model.description || "智能体"}
+                    </div>
+                  </div>
+                </div>
+              </SelectItem>
+            ))}
+          {modelsWithAvatars.filter((m) => m.type === "user").length > 0 && (
             <>
               <div className="mx-2 my-1 h-px bg-border" />
-              {availableUsers.map((model) => (
-                <SelectItem key={model.id} value={model.name}>
-                  <div className="flex items-center gap-2">
-                    <div className="truncate font-medium text-xs">{model.name}</div>
-                    {model.isOnline && (
-                      <span className="size-2 shrink-0 rounded-full bg-green-500" />
-                    )}
-                  </div>
-                  <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
-                    用户
-                  </div>
-                </SelectItem>
-              ))}
+              {modelsWithAvatars
+                .filter((m) => m.type === "user")
+                .map((model) => (
+                  <SelectItem key={model.id} value={model.name}>
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
+                        style={{
+                          color: "#3B82F6",
+                        }}
+                      >
+                        <UserIcon variant={model.avatar.iconVariant} />
+                      </div>
+                      <div className="flex flex-col">
+                        <div className="flex items-center gap-2">
+                          <div className="truncate font-medium text-xs">{model.name}</div>
+                          {model.isOnline && (
+                            <span className="size-2 shrink-0 rounded-full bg-green-500" />
+                          )}
+                        </div>
+                        <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
+                          用户
+                        </div>
+                      </div>
+                    </div>
+                  </SelectItem>
+                ))}
             </>
           )}
         </div>

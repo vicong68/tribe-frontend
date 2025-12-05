@@ -62,7 +62,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                   alt={user.email ?? "用户头像"}
                   className="rounded-full"
                   height={24}
-                  src={`https://avatar.vercel.sh/${user.email ?? "user"}`}
+                  src={`https://avatar.vercel.sh/${user.memberId || user.email || "user"}`}
                   width={24}
                 />
                 <span className="truncate" data-testid="user-email">

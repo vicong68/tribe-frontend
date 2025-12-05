@@ -93,15 +93,7 @@ export function useSSEMessages(userId: string | null) {
   const getSSEUrl = useCallback(() => {
     // 使用相对路径，通过 Next.js API 路由代理到后端
     const sseUrl = `/api/sse/events/${userId}?heartbeat_interval=30`;
-    
-    if (typeof window !== "undefined") {
-      console.log("[SSE] 构建 SSE URL:", {
-        userId,
-        sseUrl,
-        note: "使用相对路径，通过 Next.js API 路由代理",
-      });
-    }
-    
+    // 移除构建 URL 的日志（减少日志噪音）
     return sseUrl;
   }, [userId]);
 
@@ -146,8 +138,8 @@ export function useSSEMessages(userId: string | null) {
 
     try {
       const sseUrl = getSSEUrl();
-      // 只在开发环境输出连接日志
-      if (process.env.NODE_ENV === "development") {
+      // 仅在首次连接或重连时输出日志（减少日志噪音）
+      if (process.env.NODE_ENV === "development" && reconnectAttempts === 0) {
         console.log("[SSE] 🔌 正在连接 SSE:", sseUrl);
       }
       setStatus("connecting");
@@ -156,7 +148,10 @@ export function useSSEMessages(userId: string | null) {
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
-        console.log("[SSE] ✅ SSE 连接已建立");
+        // 仅在开发环境输出连接成功日志
+        if (process.env.NODE_ENV === "development") {
+          console.log("[SSE] ✅ SSE 连接已建立");
+        }
         setStatus("connected");
         setReconnectAttempts(0);
       };
@@ -272,7 +267,10 @@ export function useSSEMessages(userId: string | null) {
    * 手动重连
    */
   const reconnect = useCallback(() => {
-    console.log("[SSE] 手动重连");
+    // 仅在开发环境输出手动重连日志
+    if (process.env.NODE_ENV === "development") {
+      console.log("[SSE] 手动重连");
+    }
     cleanup();
     setReconnectAttempts(0);
     setStatus("disconnected");
@@ -306,6 +304,11 @@ export function useSSEMessages(userId: string | null) {
       return;
     }
 
+    // 如果已经连接，跳过（防止 Fast Refresh 时重复连接）
+    if (eventSourceRef.current?.readyState === EventSource.OPEN) {
+      return;
+    }
+
     // 延迟建立连接，等待会话和页面完全初始化
     const connectTimer = setTimeout(() => {
       connect();
@@ -320,7 +323,10 @@ export function useSSEMessages(userId: string | null) {
   // 网络状态变化时重连
   useEffect(() => {
     if (isOnline && status === "disconnected" && userId) {
-      console.log("[SSE] 网络恢复，尝试重连");
+      // 仅在开发环境输出重连日志
+      if (process.env.NODE_ENV === "development") {
+        console.log("[SSE] 网络恢复，尝试重连");
+      }
       reconnect();
     }
   }, [isOnline, status, userId, reconnect]);

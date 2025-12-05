@@ -13,8 +13,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { useChatModels } from "@/lib/ai/models-client";
+import { getAvatarInfo, preloadAvatars } from "@/lib/avatar-utils";
 import { cn } from "@/lib/utils";
-import { CheckCircleFillIcon, ChevronDownIcon } from "./icons";
+import { CheckCircleFillIcon, ChevronDownIcon, BotIcon, UserIcon } from "./icons";
 
 export function ModelSelector({
   session,
@@ -69,13 +70,18 @@ export function ModelSelector({
 
   // 合并列表：agents 在前，users 在后
   const availableChatModels = [...availableAgents, ...availableUsers];
+  
+  // 预加载所有模型的头像信息
+  const modelsWithAvatars = useMemo(() => {
+    return preloadAvatars(availableChatModels);
+  }, [availableChatModels]);
 
   const selectedChatModel = useMemo(() => {
     // 查找选中的模型（可能是agent或user）
-    return availableChatModels.find(
+    return modelsWithAvatars.find(
       (chatModel) => chatModel.id === optimisticModelId
-    ) || availableChatModels[0]; // 如果找不到，使用第一个
-  }, [optimisticModelId, availableChatModels]);
+    ) || modelsWithAvatars[0]; // 如果找不到，使用第一个
+  }, [optimisticModelId, modelsWithAvatars]);
 
   return (
     <DropdownMenu onOpenChange={setOpen} open={open}>
@@ -91,6 +97,20 @@ export function ModelSelector({
           data-testid="model-selector"
           variant="outline"
         >
+          {selectedChatModel && (
+            <div
+              className="mr-2 flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
+              style={{
+                color: "#3B82F6",
+              }}
+            >
+              {selectedChatModel.avatar.isAgent ? (
+                <BotIcon variant={selectedChatModel.avatar.iconVariant} />
+              ) : (
+                <UserIcon variant={selectedChatModel.avatar.iconVariant} />
+              )}
+            </div>
+          )}
           {selectedChatModel?.name}
           <ChevronDownIcon />
         </Button>
@@ -101,91 +121,115 @@ export function ModelSelector({
       >
         {availableAgents.length > 0 && (
           <>
-            {availableAgents.map((chatModel) => {
-              const { id } = chatModel;
+            {modelsWithAvatars
+              .filter((m) => m.type === "agent")
+              .map((chatModel) => {
+                const { id } = chatModel;
 
-              return (
-                <DropdownMenuItem
-                  asChild
-                  data-active={id === optimisticModelId}
-                  data-testid={`model-selector-item-${id}`}
-                  key={id}
-                  onSelect={() => {
-                    setOpen(false);
+                return (
+                  <DropdownMenuItem
+                    asChild
+                    data-active={id === optimisticModelId}
+                    data-testid={`model-selector-item-${id}`}
+                    key={id}
+                    onSelect={() => {
+                      setOpen(false);
 
-                    startTransition(() => {
-                      setOptimisticModelId(id);
-                      saveChatModelAsCookie(id);
-                    });
-                  }}
-                >
-                  <button
-                    className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
-                    type="button"
+                      startTransition(() => {
+                        setOptimisticModelId(id);
+                        saveChatModelAsCookie(id);
+                      });
+                    }}
                   >
-                    <div className="flex flex-col items-start gap-1">
-                      <div className="text-sm sm:text-base">{chatModel.name}</div>
-                      {chatModel.description && (
-                        <div className="line-clamp-2 text-muted-foreground text-xs">
-                          {chatModel.description}
+                    <button
+                      className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
+                      type="button"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
+                          style={{
+                            color: "#3B82F6",
+                          }}
+                        >
+                          <BotIcon variant={chatModel.avatar.iconVariant} />
                         </div>
-                      )}
-                    </div>
+                        <div className="flex flex-col items-start gap-1">
+                          <div className="text-sm sm:text-base">{chatModel.name}</div>
+                          {chatModel.description && (
+                            <div className="line-clamp-2 text-muted-foreground text-xs">
+                              {chatModel.description}
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
-                    <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
-                      <CheckCircleFillIcon />
-                    </div>
-                  </button>
-                </DropdownMenuItem>
-              );
-            })}
+                      <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
+                        <CheckCircleFillIcon />
+                      </div>
+                    </button>
+                  </DropdownMenuItem>
+                );
+              })}
           </>
         )}
         
         {availableUsers.length > 0 && (
           <>
             {availableAgents.length > 0 && <DropdownMenuSeparator />}
-            {availableUsers.map((chatModel) => {
-              const { id } = chatModel;
+            {modelsWithAvatars
+              .filter((m) => m.type === "user")
+              .map((chatModel) => {
+                const { id } = chatModel;
 
-              return (
-                <DropdownMenuItem
-                  asChild
-                  data-active={id === optimisticModelId}
-                  data-testid={`model-selector-item-${id}`}
-                  key={id}
-                  onSelect={() => {
-                    setOpen(false);
+                return (
+                  <DropdownMenuItem
+                    asChild
+                    data-active={id === optimisticModelId}
+                    data-testid={`model-selector-item-${id}`}
+                    key={id}
+                    onSelect={() => {
+                      setOpen(false);
 
-                    startTransition(() => {
-                      setOptimisticModelId(id);
-                      saveChatModelAsCookie(id);
-                    });
-                  }}
-                >
-                  <button
-                    className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
-                    type="button"
+                      startTransition(() => {
+                        setOptimisticModelId(id);
+                        saveChatModelAsCookie(id);
+                      });
+                    }}
                   >
-                    <div className="flex flex-col items-start gap-1">
+                    <button
+                      className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
+                      type="button"
+                    >
                       <div className="flex items-center gap-2">
-                        <div className="text-sm sm:text-base">{chatModel.name}</div>
-                        {chatModel.isOnline && (
-                          <span className="size-2 rounded-full bg-green-500" />
-                        )}
+                        <div
+                          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
+                          style={{
+                            color: "#3B82F6",
+                          }}
+                        >
+                          <UserIcon variant={chatModel.avatar.iconVariant} />
+                        </div>
+                        <div className="flex flex-col items-start gap-1">
+                          <div className="flex items-center gap-2">
+                            <div className="text-sm sm:text-base">{chatModel.name}</div>
+                            {chatModel.isOnline && (
+                              <span className="size-2 rounded-full bg-green-500" />
+                            )}
+                          </div>
+                          <div className="line-clamp-2 text-muted-foreground text-xs">
+                            用户
+                          </div>
+                        </div>
                       </div>
-                      <div className="line-clamp-2 text-muted-foreground text-xs">
-                        用户
-                      </div>
-                    </div>
 
-                    <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
-                      <CheckCircleFillIcon />
-                    </div>
-                  </button>
-                </DropdownMenuItem>
-              );
-            })}
+                      <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
+                        <CheckCircleFillIcon />
+                      </div>
+                    </button>
+                  </DropdownMenuItem>
+                );
+              })}
           </>
         )}
       </DropdownMenuContent>

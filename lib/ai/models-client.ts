@@ -102,8 +102,15 @@ function getFallbackModels(): ChatModel[] {
   ];
 }
 
+// 模块级缓存，避免跨组件重复查询
+const modelsCache: Record<string, { models: ChatModel[]; timestamp: number }> = {};
+// 正在进行的请求，用于去重（防止多个组件同时发起相同查询）
+const pendingRequests: Record<string, Promise<ChatModel[]>> = {};
+const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
+
 /**
  * React Hook：在客户端组件中获取模型列表
+ * 使用模块级缓存和请求去重，避免重复查询
  * @param includeUsers 是否包含用户列表（仅登录用户）
  */
 export function useChatModels(includeUsers: boolean = false) {
@@ -111,15 +118,64 @@ export function useChatModels(includeUsers: boolean = false) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    console.log("[useChatModels] Fetching models, includeUsers:", includeUsers);
-    fetchChatModels(includeUsers)
+    const cacheKey = `models_${includeUsers}`;
+    const cached = modelsCache[cacheKey];
+    const now = Date.now();
+    
+    // 如果缓存有效，直接使用
+    if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+      setModels(cached.models);
+      setLoading(false);
+      return;
+    }
+
+    // 如果已有相同请求正在进行，等待该请求完成
+    if (pendingRequests[cacheKey]) {
+      pendingRequests[cacheKey]
+        .then((fetchedModels) => {
+          setModels(fetchedModels);
+          setLoading(false);
+        })
+        .catch((error) => {
+          console.error("Failed to fetch chat models (from pending request):", error);
+          setLoading(false);
+        });
+      return;
+    }
+
+    // 发起新请求（仅在开发环境且首次查询时输出日志）
+    if (process.env.NODE_ENV === "development" && !cached) {
+      console.log("[useChatModels] Fetching models, includeUsers:", includeUsers);
+    }
+    const fetchPromise = fetchChatModels(includeUsers)
       .then((fetchedModels) => {
-        console.log("[useChatModels] Fetched models:", fetchedModels.map(m => ({ id: m.id, name: m.name, type: m.type })));
-        setModels(fetchedModels);
-        setLoading(false);
+        // 仅在开发环境输出详细日志（减少日志噪音）
+        if (process.env.NODE_ENV === "development") {
+          console.log("[useChatModels] Fetched models:", fetchedModels.map(m => ({ id: m.id, name: m.name, type: m.type })));
+        }
+        // 更新缓存
+        modelsCache[cacheKey] = { models: fetchedModels, timestamp: now };
+        // 清除待处理请求
+        delete pendingRequests[cacheKey];
+        return fetchedModels;
       })
       .catch((error) => {
         console.error("Failed to fetch chat models:", error);
+        // 清除待处理请求
+        delete pendingRequests[cacheKey];
+        throw error;
+      });
+
+    // 保存待处理请求
+    pendingRequests[cacheKey] = fetchPromise;
+
+    // 更新状态
+    fetchPromise
+      .then((fetchedModels) => {
+        setModels(fetchedModels);
+        setLoading(false);
+      })
+      .catch(() => {
         setLoading(false);
       });
   }, [includeUsers]);
