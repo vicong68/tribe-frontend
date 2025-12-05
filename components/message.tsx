@@ -63,52 +63,12 @@ const PurePreviewMessage = ({
   const hasTextParts = messageParts.some(
     (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
   );
-  
-  // 诊断日志：检查 messageParts 的实际内容
-  useEffect(() => {
-    console.log(`[PreviewMessage] messageParts 诊断 - ID: ${message.id}:`, {
-      role: message.role,
-      partsCount: messageParts.length,
-      parts: messageParts.map((p, idx) => ({
-        index: idx,
-        type: p.type,
-        hasText: p.type === "text" ? !!(p as any).text : false,
-        textValue: p.type === "text" ? (p as any).text : undefined,
-        textType: p.type === "text" ? typeof (p as any).text : undefined,
-        rawPart: p,
-      })),
-      hasTextParts,
-      messagePartsRaw: message.parts,
-    });
-  }, [message.id, message.role, messageParts.length]);
 
   useDataStream();
 
-  // 判断消息类型（必须在 useEffect 之前定义）
   const isAgent = isAgentMessage(message.role, message.metadata?.communicationType);
   const isRemoteUser = isRemoteUserMessage(message.role, message.metadata?.communicationType);
   const isLocalUser = message.role === "user";
-  
-  // 诊断日志：检查用户消息的 parts（必须在变量定义之后）
-  useEffect(() => {
-    if (message.role === "user") {
-      console.log(`[PreviewMessage] 用户消息诊断 - ID: ${message.id}:`, {
-        role: message.role,
-        partsCount: messageParts.length,
-        parts: messageParts.map((p) => ({
-          type: p.type,
-          hasText: p.type === "text" ? !!(p as any).text : false,
-          textLength: p.type === "text" ? ((p as any).text || "").length : 0,
-          textPreview: p.type === "text" ? ((p as any).text || "").substring(0, 50) : null,
-        })),
-        hasTextParts,
-        attachmentsCount: attachmentsFromMessage.length,
-        metadata: message.metadata || {},
-        isLocalUser,
-        isRemoteUser,
-      });
-    }
-  }, [message.id, message.role, messageParts, hasTextParts, attachmentsFromMessage.length, isLocalUser, isRemoteUser]);
   
   // 获取metadata（缓存，避免重复访问）
   const metadata = message.metadata || {};
@@ -149,14 +109,8 @@ const PurePreviewMessage = ({
         senderName = foundAgent?.name || agentUsed;
       }
       
-      // 如果还是没有名称，使用默认值（但不应该到这里）
       if (!senderName) {
-        senderName = metadata.agentUsed || "智能体";
-        console.warn(`[PreviewMessage] Agent消息缺少名称，使用默认值 - ID: ${message.id}`, {
-          metadata,
-          agentUsed: metadata.agentUsed,
-          communicationType: metadata.communicationType,
-        });
+        senderName = metadata.agentUsed || selectedModelId || "智能体";
       }
     } else if (isRemoteUser) {
       // 远端用户消息：优先使用metadata.senderName
@@ -179,32 +133,9 @@ const PurePreviewMessage = ({
         senderName = "用户";
       }
     } else {
-      // 未知类型的Assistant消息（不应该发生，但作为兜底）
-      // 优先使用metadata.senderName，其次使用agentUsed
       senderName = metadata.senderName || metadata.agentUsed || "智能体";
-      console.warn(`[PreviewMessage] 未知类型的Assistant消息 - ID: ${message.id}`, {
-        role: message.role,
-        metadata,
-        communicationType: metadata.communicationType,
-        isAgent,
-        isRemoteUser,
-      });
     }
   }
-  
-  // 诊断日志：检查Agent消息的名称获取
-  useEffect(() => {
-    if (isAgent && message.role === "assistant") {
-      console.log(`[PreviewMessage] Agent消息名称诊断 - ID: ${message.id}:`, {
-        senderName,
-        metadataSenderName: metadata.senderName,
-        metadataAgentUsed: metadata.agentUsed,
-        metadataSenderId: metadata.senderId,
-        isAgent,
-        communicationType: metadata.communicationType,
-      });
-    }
-  }, [message.id, message.role, senderName, metadata, isAgent]);
   
   // 使用缓存的metadata，避免重复访问
   const receiverName = metadata.receiverName;
@@ -237,40 +168,9 @@ const PurePreviewMessage = ({
     );
     const hasValidContent = hasValidText || hasAttachments || hasOtherContent;
     
-    // 诊断日志：检查消息内容验证
     if (!hasValidContent) {
-      console.warn(`[PreviewMessage] 消息没有有效内容，跳过渲染 - ID: ${message.id}`, {
-        role: message.role,
-        partsCount: messageParts.length,
-        parts: messageParts.map((p, idx) => ({
-          index: idx,
-          type: p.type,
-          hasText: p.type === "text" ? !!(p as any).text : false,
-          textValue: p.type === "text" ? (p as any).text : undefined,
-          textLength: p.type === "text" ? ((p as any).text || "").length : 0,
-        })),
-        hasTextParts,
-        hasValidText,
-        hasAttachments,
-        hasOtherContent,
-        attachmentsCount: attachmentsFromMessage.length,
-      });
       return null;
     }
-    
-    // 诊断日志：检查消息内容渲染
-    console.log(`[PreviewMessage] 渲染消息内容 - ID: ${message.id}`, {
-      role: message.role,
-      partsCount: messageParts.length,
-      hasValidText,
-      hasAttachments,
-      hasOtherContent,
-      parts: messageParts.map((p, idx) => ({
-        index: idx,
-        type: p.type,
-        textPreview: p.type === "text" ? ((p as any).text || "").substring(0, 50) : undefined,
-      })),
-    });
     
     return (
       <>
@@ -298,15 +198,6 @@ const PurePreviewMessage = ({
         {messageParts.map((part, index) => {
         const { type } = part;
         const key = `message-${message.id}-part-${index}`;
-        
-        // 诊断日志：检查每个 part 的详细信息
-        console.log(`[PreviewMessage] 处理 part - ID: ${message.id}, index: ${index}`, {
-          type,
-          part,
-          hasText: type === "text" ? !!(part as any).text : false,
-          textValue: type === "text" ? (part as any).text : undefined,
-          textType: type === "text" ? typeof (part as any).text : undefined,
-        });
 
         if (type === "reasoning" && (part as any).text?.trim().length > 0) {
           return (
@@ -320,24 +211,9 @@ const PurePreviewMessage = ({
 
         if (type === "text") {
           if (mode === "view") {
-            // 尝试多种方式访问 text 字段
             const textContent = (part as any).text || (part as any).content || "";
-            
-            // 诊断日志：检查用户消息的文本内容
-            console.log(`[PreviewMessage] 处理 text part - ID: ${message.id}, index: ${index}`, {
-              textContent,
-              textLength: textContent.length,
-              isEmpty: !textContent || textContent.trim().length === 0,
-              partRaw: part,
-              partKeys: Object.keys(part),
-            });
 
             if (!textContent || textContent.trim().length === 0) {
-              console.warn(`[PreviewMessage] Text part 内容为空 - ID: ${message.id}, index: ${index}`, {
-                part,
-                partType: typeof part,
-                partKeys: Object.keys(part),
-              });
               return null;
             }
 

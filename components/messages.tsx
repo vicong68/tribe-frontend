@@ -54,8 +54,14 @@ function PureMessages({
     const result = Array.from(seen.values());
     
     // 过滤空消息：parts 为空或没有有效的文本内容
+    // 注意：用户消息应该总是有内容，不应该被过滤（除非确实为空）
     const filteredMessages = result.filter((message) => {
       const parts = message.parts || [];
+      
+      if (message.role === "user") {
+        return true;
+      }
+      
       // 检查是否有有效的文本内容
       const hasValidText = parts.some(
         (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
@@ -67,48 +73,11 @@ function PureMessages({
         (p) => p.type !== "text" && p.type !== "file"
       );
       
-      // 保留有有效内容的消息
       return hasValidText || hasAttachments || hasOtherContent;
     });
     
-    // 诊断日志：检查消息去重和过滤
-    if (messages.length !== filteredMessages.length) {
-      const removedCount = result.length - filteredMessages.length;
-      console.log(`[Messages] 消息处理 - 对话 ${chatId}:`, {
-        originalCount: messages.length,
-        afterDedupe: result.length,
-        afterFilter: filteredMessages.length,
-        removedEmpty: removedCount,
-        userMessages: filteredMessages.filter((m) => m.role === "user").length,
-        assistantMessages: filteredMessages.filter((m) => m.role === "assistant").length,
-        emptyMessages: result.filter((m) => {
-          const parts = m.parts || [];
-          const hasValidText = parts.some(
-            (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
-          );
-          const hasAttachments = parts.some((p) => p.type === "file");
-          return !hasValidText && !hasAttachments;
-        }).map((m) => ({ id: m.id, role: m.role, partsCount: m.parts?.length || 0 })),
-      });
-    }
-    
     return filteredMessages;
   }, [messages, chatId]);
-  
-  // 诊断日志：检查最终显示的消息
-  useEffect(() => {
-    console.log(`[Messages] 最终显示的消息 - 对话 ${chatId}:`, {
-      totalMessages: uniqueMessages.length,
-      userMessages: uniqueMessages.filter((m) => m.role === "user").length,
-      assistantMessages: uniqueMessages.filter((m) => m.role === "assistant").length,
-      messages: uniqueMessages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        partsCount: m.parts?.length || 0,
-        hasText: m.parts?.some((p) => p.type === "text" && (p as any).text) || false,
-      })),
-    });
-  }, [chatId, uniqueMessages]);
 
   return (
     <div className="relative flex-1">

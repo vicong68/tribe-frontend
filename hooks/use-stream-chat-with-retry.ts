@@ -13,8 +13,12 @@ import type { ChatMessage } from "@/lib/types";
  * 为了兼容性，我们使用更灵活的类型定义
  */
 type ExtendedUseChatOptions<T extends UIMessage = ChatMessage> = Omit<UseChatOptions<T>, 'onFinish' | 'onError'> & {
+  id?: string;
   onError?: (error: Error) => void;
   onFinish?: () => void | Promise<void>;
+} & {
+  messages?: T[];
+  generateId?: () => string;
 };
 
 /**
@@ -35,32 +39,13 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
   const isOnline = useNetworkStatus();
 
   const maxRetries = 3;
-  const baseRetryDelay = 1000; // 1秒
-
-  // 确保 initialMessages 被正确使用
-  // useChat 的 messages 参数在初始化时使用，后续通过内部状态管理
-  
-  // 诊断日志：检查传入的 messages
-  useEffect(() => {
-    console.log(`[useStreamChatWithRetry] 初始化 - 对话 ${options.id}:`, {
-      messagesCount: options.messages?.length || 0,
-      userMessages: options.messages?.filter((m) => m.role === "user").length || 0,
-      assistantMessages: options.messages?.filter((m) => m.role === "assistant").length || 0,
-      messages: options.messages?.map((m) => ({
-        id: m.id,
-        role: m.role,
-        partsCount: m.parts?.length || 0,
-      })),
-    });
-  }, [options.id, options.messages]);
+  const baseRetryDelay = 1000;
   
   const chat = useChat<T>({
     ...options,
     // 确保 messages 参数被正确传递
     messages: options.messages || [],
     onError: (error) => {
-      console.error("[Stream] 流式响应错误:", error);
-
       // 检查错误类型，只对网络错误和服务器错误（5xx）进行重试
       // 不重试客户端错误（4xx），如 bad_request, unauthorized, forbidden 等
       const errorMessage = error?.message || "";
@@ -83,9 +68,6 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
         !isRetrying
       ) {
         const delay = baseRetryDelay * Math.pow(2, retryCount);
-        console.log(
-          `[Stream] ${delay}ms 后尝试重试 (第 ${retryCount + 1}/${maxRetries} 次)`
-        );
 
         setIsRetrying(true);
         retryTimeoutRef.current = setTimeout(() => {
@@ -96,12 +78,6 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
           }
         }, delay);
       } else {
-        // 不可重试的错误或达到最大重试次数，直接调用原始错误处理器
-        if (!isRetryableError) {
-          console.log(
-            `[Stream] 错误不可重试 (${errorMessage})，跳过重试逻辑`
-          );
-        }
         if (options.onError) {
           options.onError(error);
         }
@@ -123,20 +99,6 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
       }
     },
   });
-
-  // 诊断日志：检查 useChat 返回的 messages
-  useEffect(() => {
-    console.log(`[useStreamChatWithRetry] useChat 返回的 messages - 对话 ${options.id}:`, {
-      messagesCount: chat.messages.length,
-      userMessages: chat.messages.filter((m) => m.role === "user").length,
-      assistantMessages: chat.messages.filter((m) => m.role === "assistant").length,
-      messages: chat.messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        partsCount: m.parts?.length || 0,
-      })),
-    });
-  }, [options.id, chat.messages]);
   
   // 保存最后一条消息，用于重试
   useEffect(() => {
@@ -157,14 +119,8 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
     };
   }, []);
 
-  // 网络恢复时，如果正在重试，取消重试
   useEffect(() => {
-    if (isOnline && isRetrying) {
-      // 网络恢复，可以继续重试
-      console.log("[Stream] 网络恢复，继续重试");
-    } else if (!isOnline && isRetrying) {
-      // 网络断开，取消重试
-      console.log("[Stream] 网络断开，取消重试");
+    if (!isOnline && isRetrying) {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
         retryTimeoutRef.current = null;

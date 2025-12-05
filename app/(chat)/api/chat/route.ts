@@ -23,11 +23,6 @@ import { type PostRequestBody, postRequestBodySchema } from "./schema";
 const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
-// 记录后端 URL 配置（用于调试）
-if (typeof process !== "undefined" && process.env) {
-  console.log("[chat/route] Backend API URL:", BACKEND_API_URL);
-}
-
 /**
  * 从后端获取 Agent 或用户的显示名称
  * 仅在消息创建时调用一次，避免重复查询
@@ -82,15 +77,11 @@ async function getAgentOrUserName(
     } catch (fetchError) {
       clearTimeout(timeoutId);
       if (fetchError instanceof Error && fetchError.name === "AbortError") {
-        console.warn("[chat/route] Agent/user name fetch timeout, using targetId:", targetId);
-        // 超时时，对于 Agent 直接使用 targetId（可能是显示名称）
         return isUser ? null : targetId;
       }
       throw fetchError;
     }
   } catch (error) {
-    console.warn("[chat/route] Failed to fetch agent/user name:", error);
-    // 失败时，对于 Agent 直接使用 targetId（可能是显示名称）
     return isUser ? null : targetId;
   }
   return null;
@@ -105,18 +96,6 @@ export async function POST(request: Request) {
     const json = await request.json();
     requestBody = postRequestBodySchema.parse(json);
   } catch (error) {
-    // 记录详细的验证错误信息（生产环境也需要日志）
-    console.error("[chat/route] Request validation failed:", error);
-    if (error instanceof Error) {
-      console.error("[chat/route] Error details:", {
-        message: error.message,
-        stack: error.stack,
-      });
-    }
-    // 如果是 Zod 验证错误，记录具体字段
-    if (error && typeof error === "object" && "issues" in error) {
-      console.error("[chat/route] Validation issues:", (error as any).issues);
-    }
     return new ChatSDKError("bad_request:api").toResponse();
   }
 
@@ -168,14 +147,6 @@ export async function POST(request: Request) {
       const hasFileAttachments = messageParts.some((part) => part.type === "file");
       const messageText = getTextFromMessage(message);
       
-      // 调试：检查提取的文本
-      console.log("[chat/route] Title generation - extracted text:", {
-        messageText,
-        textLength: messageText?.length || 0,
-        trimmedLength: messageText?.trim().length || 0,
-        hasFileAttachments,
-      });
-      
       let title = "新对话";
       // 验证消息文本不为空（如果有文件附件但没有文本，也跳过标题生成）
       if (messageText && messageText.trim().length > 0) {
@@ -193,15 +164,8 @@ export async function POST(request: Request) {
             conversationId: titleConversationId,
           });
         } catch (error) {
-          // 如果标题生成失败，使用默认标题
-          console.error("[chat/route] Failed to generate title:", error);
           title = "新对话";
         }
-      } else {
-        console.warn("[chat/route] Message text is empty, skipping title generation", {
-          messageText,
-          hasFileAttachments,
-        });
       }
 
       try {
@@ -212,38 +176,7 @@ export async function POST(request: Request) {
           visibility: selectedVisibilityType,
         });
       } catch (error) {
-        // 如果保存聊天失败，记录错误但继续执行（允许用户发送消息）
-        console.error("[chat/route] Failed to save chat:", {
-          error,
-          chatId: id,
-          userId: session.user.id,
-          title,
-        });
-        // 检查是否是重复插入错误（聊天已存在）
-        if (error instanceof ChatSDKError && error.type === "bad_request" && error.surface === "database") {
-          // 如果是重复插入或外键约束错误，允许继续（聊天可能已存在或用户可能不存在）
-          if (
-            error.message?.includes("already exists") ||
-            error.message?.includes("duplicate") ||
-            error.message?.includes("用户不存在") ||
-            error.message?.includes("foreign key")
-          ) {
-            console.warn("[chat/route] Chat save failed (may already exist or user issue), continuing...", {
-              error: error.message,
-              chatId: id,
-              userId: session.user.id,
-            });
-            // 不抛出错误，允许继续处理消息
-          } else {
-            // 其他数据库错误，记录但继续执行（避免阻塞用户）
-            console.error("[chat/route] Database error when saving chat, but continuing:", error);
-            // 不抛出错误，允许继续处理消息
-          }
-        } else {
-          // 非 ChatSDKError 错误，记录但继续执行
-          console.error("[chat/route] Unexpected error when saving chat, but continuing:", error);
-          // 不抛出错误，允许继续处理消息
-        }
+        // 静默处理错误，允许继续执行
       }
       // New chat - no need to fetch messages, it's empty
     }
@@ -261,8 +194,6 @@ export async function POST(request: Request) {
       // 从 email 提取 member_id（格式：member_id@qq.com）
       backendMemberId = session.user.email.split("@")[0];
     } else {
-      // 如果都没有，使用前端 UUID（向后兼容，但不推荐）
-      console.warn("[chat/route] 无法获取后端 member_id，使用前端 UUID:", session.user.id);
       backendMemberId = session.user.id;
     }
     
@@ -301,9 +232,7 @@ export async function POST(request: Request) {
     if (!isValidUUID(message.id)) {
       // 生成新的 UUID 作为数据库 ID
       dbUserMessageId = generateUUID();
-      // 将原始 ID 保存在 metadata 中，以便追踪
       userMessageMetadata.originalMessageId = message.id;
-      console.log(`[chat/route] Converted non-UUID user message ID: ${message.id} -> ${dbUserMessageId}`);
     }
     
     await saveMessages({
@@ -374,17 +303,6 @@ export async function POST(request: Request) {
     // 注意：使用后端 member_id 而不是前端 UUID，确保对话记忆一致性
     const sessionId = generateSessionId(backendMemberId, selectedChatModel);
     
-    // 调试日志
-    console.log("[chat/route] Generating session_id:", {
-      frontendUserId: session.user.id,
-      backendMemberId,
-      selectedChatModel,
-      targetType,
-      targetId,
-      sessionId,
-      chatId: id,
-    });
-    
     // 预生成 assistant 消息 ID（使用与 useChat 相同的 generateUUID）
     // 这样后端可以使用这个 ID，确保 text-start 和 data-appendMessage 中的 ID 与前端匹配
     const expectedAssistantMessageId = generateUUID();
@@ -412,15 +330,11 @@ export async function POST(request: Request) {
       backendRequestBody.agent_id = targetId; // Agent ID（规范标识，如：司仪、书吏等）
       backendRequestBody.target_type = "agent";
     }
-    
-    console.log("[chat/route] Backend request body:", JSON.stringify(backendRequestBody, null, 2));
 
     // 用户-用户消息使用非流式接口，Agent消息使用流式接口
     if (isUserToUser) {
-      // 用户-用户消息：使用非流式的 /api/chat 接口（同步模式）
       try {
         const backendUrl = `${BACKEND_API_URL}/api/chat?async_mode=false`;
-        console.log("[chat/route] User-to-user message, using non-streaming API:", backendUrl);
         
         const backendResponse = await fetch(backendUrl, {
           method: "POST",
@@ -442,7 +356,6 @@ export async function POST(request: Request) {
         if (!backendResponse.ok) {
           const errorData = await backendResponse.json().catch(() => ({}));
           const errorMessage = errorData.message || errorData.detail || "发送消息失败";
-          console.error("[chat/route] User-to-user message failed:", errorData);
           return new ChatSDKError("offline:chat", errorMessage).toResponse();
         }
 
@@ -467,7 +380,6 @@ export async function POST(request: Request) {
             await writer.write(encoder.encode(`d:{"finishReason":"stop"}\n`));
             await writer.close();
           } catch (error) {
-            console.error("[chat/route] Error writing user-to-user response:", error);
             await writer.abort(error);
           }
         })();
@@ -480,7 +392,6 @@ export async function POST(request: Request) {
           },
         });
       } catch (error) {
-        console.error("[chat/route] User-to-user message error:", error);
         return new ChatSDKError(
           "offline:chat",
           error instanceof Error ? error.message : "发送消息时遇到问题。请检查您的网络连接并重试。"
@@ -488,11 +399,8 @@ export async function POST(request: Request) {
       }
     }
 
-    // Agent消息：使用流式接口
-    // 使用 JSON SSE 格式（AI SDK 5 的 DefaultChatTransport 期望的格式）
     try {
       const backendUrl = `${BACKEND_API_URL}/api/chat/stream?use_data_stream_protocol=false`;
-      console.log("[chat/route] Agent message, using streaming API:", backendUrl);
       
       // 流式请求不使用超时，因为流式响应可能需要较长时间
       // 超时控制由后端和客户端处理
@@ -510,23 +418,14 @@ export async function POST(request: Request) {
           errorData = await backendResponse.json();
         } catch {
           const errorText = await backendResponse.text();
-          console.error("[chat/route] Backend API error (non-JSON):", {
-            status: backendResponse.status,
-            statusText: backendResponse.statusText,
-            errorText,
-            backendUrl: BACKEND_API_URL,
-          });
           return new ChatSDKError(
             "offline:chat",
             `后端服务错误: ${backendResponse.status} ${backendResponse.statusText}`
           ).toResponse();
         }
 
-        // 解析后端统一错误格式
         const errorCode = errorData.code || "offline:chat";
         const errorMessage = errorData.message || errorData.detail || "请求失败";
-        
-        console.error("Backend API error:", errorData);
         
         // 根据错误码返回对应的 ChatSDKError
         if (errorCode.startsWith("unauthorized:")) {
@@ -559,10 +458,8 @@ export async function POST(request: Request) {
         try {
           const appendUserMessageEvent = `2:{"type":"data-appendMessage","data":${JSON.stringify(completeUserMessage)}}\n`;
           await writer.write(encoder.encode(appendUserMessageEvent));
-          console.log(`[chat/route] ✅ Sent user message with metadata via data-appendMessage:`, completeUserMessage);
         } catch (error) {
-          console.error("[chat/route] Failed to send user message via data-appendMessage:", error);
-          // 不影响流式响应，继续执行
+          // 静默处理错误，不影响流式响应
         }
       })();
       
@@ -626,9 +523,7 @@ export async function POST(request: Request) {
                   if (!isValidUUID(messageId)) {
                     // 生成新的 UUID 作为数据库 ID
                     dbMessageId = generateUUID();
-                    // 将原始 ID 保存在 metadata 中，以便追踪
                     metadata.originalMessageId = messageId;
-                    console.log(`[chat/route] Converted non-UUID message ID (fallback): ${messageId} -> ${dbMessageId}`);
                   }
                   
                   // 构建消息 parts
@@ -665,10 +560,9 @@ export async function POST(request: Request) {
                       },
                     ],
                   });
-                  messageSaved = true; // 标记为已保存
-                  console.log(`[chat/route] ✅ Saved assistant message ${dbMessageId}${messageId !== dbMessageId ? ` (original: ${messageId})` : ''} to database (stream end - fallback)`);
+                  messageSaved = true;
                 } catch (error) {
-                  console.error("[chat/route] Failed to save assistant message (stream end):", error);
+                  // 静默处理错误
                 }
               }
               break;
@@ -701,6 +595,23 @@ export async function POST(request: Request) {
                     assistantMessageId = parsed.id;
                     assistantMessageParts = [];
                     messageTextBuffer = "";
+                    
+                    // 立即发送包含 metadata 的 data-appendMessage 事件
+                    // 这样客户端可以在流式回复开始时就能获取到正确的名称
+                    // 避免在流式回复过程中显示默认的"智能体"名称
+                    try {
+                      const initialMessage: ChatMessage = {
+                        id: assistantMessageId,
+                        role: "assistant",
+                        parts: [], // 初始时 parts 为空，流式响应会逐步填充
+                        metadata: fixedMetadata, // 使用固定的 metadata，确保名称正确
+                      };
+                      
+                      const appendMessageEvent = `2:{"type":"data-appendMessage","data":${JSON.stringify(initialMessage)}}\n`;
+                      await writer.write(encoder.encode(appendMessageEvent));
+                    } catch (error) {
+                      // 静默处理错误，不影响流式响应
+                    }
                   }
                   
                   // 收集文本内容
@@ -767,9 +678,7 @@ export async function POST(request: Request) {
                         if (!isValidUUID(messageId)) {
                           // 生成新的 UUID 作为数据库 ID
                           dbMessageId = generateUUID();
-                          // 将原始 ID 保存在 metadata 中，以便追踪
                           metadata.originalMessageId = messageId;
-                          console.log(`[chat/route] Converted non-UUID message ID: ${messageId} -> ${dbMessageId}`);
                         }
                         
                         // 构建完整的消息对象（包含 metadata）
@@ -782,15 +691,8 @@ export async function POST(request: Request) {
                           metadata: metadata,
                         };
                         
-                        // 通过 data-appendMessage 事件发送完整消息（包含 metadata）
-                        // 这样客户端可以立即获取到包含 metadata 的消息
                         const appendMessageEvent = `2:{"type":"data-appendMessage","data":${JSON.stringify(completeMessage)}}\n`;
                         await writer.write(encoder.encode(appendMessageEvent));
-                        console.log(`[chat/route] ✅ Sent assistant message with metadata via data-appendMessage:`, {
-                          clientMessageId: messageId,
-                          dbMessageId: dbMessageId,
-                          metadata: metadata,
-                        });
                         
                         // 立即保存消息（不阻塞流式响应）
                         // 符合 AI SDK 最佳实践：在服务器端保存消息
@@ -810,16 +712,13 @@ export async function POST(request: Request) {
                                 },
                               ],
                             });
-                            messageSaved = true; // 标记为已保存
-                            console.log(`[chat/route] ✅ Saved assistant message ${dbMessageId}${messageId !== dbMessageId ? ` (original: ${messageId})` : ''} to database with metadata:`, metadata);
+                            messageSaved = true;
                           } catch (error) {
-                            console.error("[chat/route] Failed to save assistant message:", error);
-                            // 保存失败时，记录错误但不影响用户体验
-                            // 流结束时会再次尝试保存（兜底逻辑）
+                            // 静默处理错误
                           }
-                        })(); // 立即执行异步函数，不阻塞流式响应
+                        })();
                       } catch (error) {
-                        console.error("[chat/route] Error saving assistant message:", error);
+                        // 静默处理错误
                       }
                     }
                     
@@ -843,7 +742,7 @@ export async function POST(request: Request) {
             await writer.write(encoder.encode(pendingChunk));
           }
         } catch (error) {
-          console.error("[chat/route] Error processing stream:", error);
+          // 静默处理错误
         } finally {
           writer.close();
         }
@@ -858,13 +757,9 @@ export async function POST(request: Request) {
         },
       });
     } catch (error) {
-      console.error("[chat/route] Error proxying to backend:", {
-        error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorName: error instanceof Error ? error.name : "Unknown",
-        backendUrl: BACKEND_API_URL,
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+      if (error instanceof Error && error.message?.includes("Backend API error")) {
+        return new ChatSDKError("offline:chat", error.message).toResponse();
+      }
       
       // 不要直接 throw，而是返回错误响应
       if (error instanceof ChatSDKError) {
@@ -903,16 +798,13 @@ export async function POST(request: Request) {
       return error.toResponse();
     }
 
-    // 后端 API 错误处理
     if (
       error instanceof Error &&
       error.message?.includes("Backend API error")
     ) {
-      console.error("[chat/route] Backend API error (outer catch):", error);
       return new ChatSDKError("offline:chat", error.message).toResponse();
     }
 
-    console.error("[chat/route] Unhandled error in chat API:", error, { vercelId });
     return new ChatSDKError("offline:chat", error instanceof Error ? error.message : "Unknown error").toResponse();
   }
 }

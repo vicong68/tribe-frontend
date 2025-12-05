@@ -37,15 +37,6 @@ export function ModelSelector({
 
   const { availableChatModelIds } = entitlementsByUserType[userType];
 
-  // 调试日志
-  console.log("[ModelSelector] Debug info:", {
-    userType,
-    isLoggedIn,
-    chatModelsCount: chatModels.length,
-    chatModels: chatModels.map(m => ({ id: m.id, name: m.name, type: m.type })),
-    availableChatModelIds,
-  });
-
   // 分离 agents 和 users
   const availableAgents = chatModels.filter((chatModel) => {
     if (chatModel.type === "user") return false;
@@ -61,10 +52,6 @@ export function ModelSelector({
     }
     return false;
   });
-
-  // 调试日志
-  console.log("[ModelSelector] Filtered:", {
-    availableAgents: availableAgents.map(m => ({ id: m.id, name: m.name })),
     availableUsers: availableUsers.map(m => ({ id: m.id, name: m.name, isOnline: m.isOnline })),
   });
 

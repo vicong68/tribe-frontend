@@ -19,6 +19,7 @@ export const messageMetadataSchema = z.object({
   receiverId: z.string().optional(),
   communicationType: z.enum(["user_agent", "user_user", "agent_agent"]).optional(),
   agentUsed: z.string().optional(), // Agent名称（用于user_agent类型）
+  originalMessageId: z.string().optional(), // 原始消息ID（用于ID转换时的追踪）
 });
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;

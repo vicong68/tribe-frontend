@@ -129,9 +129,8 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     fetcher,
     {
       fallbackData: [],
-      // 即使请求失败，也使用空数据，避免侧边栏完全无法显示
-      onError: (err) => {
-        console.error("[SidebarHistory] Failed to load chat history:", err);
+      onError: () => {
+        // 静默处理错误
       },
     }
   );

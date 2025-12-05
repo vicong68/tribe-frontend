@@ -285,7 +285,7 @@ function PureMultimodalInput({
           ...successfullyUploadedAttachments,
         ]);
       } catch (error) {
-        console.error("Error uploading files!", error);
+        // 静默处理错误
       } finally {
         setUploadQueue([]);
       }
@@ -332,7 +332,6 @@ function PureMultimodalInput({
           ...(successfullyUploadedAttachments as Attachment[]),
         ]);
       } catch (error) {
-        console.error("Error uploading pasted images:", error);
         toast.error("粘贴图片上传失败");
       } finally {
         setUploadQueue([]);
@@ -543,11 +542,6 @@ function PureModelSelectorCompact({
         prevState.isLoggedIn !== isLoggedIn ||
         (prevState.chatModelsCount === 0 && chatModels.length > 0)
       ) {
-        console.log("[ModelSelectorCompact] State changed:", {
-          userType,
-          isLoggedIn,
-          chatModelsCount: chatModels.length,
-        });
         prevStateRef.current = { userType, isLoggedIn, chatModelsCount: chatModels.length };
       }
     }
