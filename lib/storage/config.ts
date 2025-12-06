@@ -134,4 +134,3 @@ export function validateMinIOConfig(): MinIOConfig {
     publicUrl: process.env.MINIO_PUBLIC_URL || endpoint,
   };
 }
-

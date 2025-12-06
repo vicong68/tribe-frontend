@@ -73,4 +73,3 @@ export function parseSessionId(
 export function isValidSessionId(sessionId: string): boolean {
   return parseSessionId(sessionId) !== null;
 }
-

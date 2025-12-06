@@ -22,4 +22,3 @@ export const backendProvider = customProvider({
     "artifact-model": createBackendLanguageModel("司仪"), // 文档生成使用司仪
   },
 });
-

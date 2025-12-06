@@ -136,4 +136,3 @@ export async function geolocation(request: Request): Promise<GeoLocation> {
 
   return await getLocationFromIP(ip);
 }
-

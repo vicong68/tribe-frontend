@@ -342,4 +342,3 @@ export function useSSEMessages(userId: string | null) {
     onFileProgress,
   };
 }
-

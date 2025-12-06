@@ -63,7 +63,7 @@
 
 ### 服务器端保存模式（推荐）
 
-```typescript
+\`\`\`typescript
 // /api/chat/route.ts
 // 在流式响应过程中保存
 if (parsed.type === "finish") {
@@ -76,11 +76,11 @@ if (parsed.type === "finish") {
 if (done && !messageSaved) {
   await saveMessages({ messages: [assistantMessage] });
 }
-```
+\`\`\`
 
 ### 客户端恢复模式（兜底）
 
-```typescript
+\`\`\`typescript
 // components/chat.tsx
 onFinish: () => {
   // 不保存消息（服务器端已处理）
@@ -92,7 +92,7 @@ useEffect(() => {
   // 页面加载时检查并恢复未保存的消息
   checkAndSaveMessages();
 }, [chatId, messages.length]);
-```
+\`\`\`
 
 ## 优势
 
@@ -118,4 +118,3 @@ useEffect(() => {
 - ✅ **性能优化**：避免重复保存，减少 API 调用
 
 所有实现都遵循了 Vercel 官方推荐的最佳实践模式。
-

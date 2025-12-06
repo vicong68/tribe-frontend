@@ -11,4 +11,3 @@ ALTER TABLE "Chat" ADD COLUMN IF NOT EXISTS "visibility" varchar DEFAULT 'privat
 
 -- 添加 lastContext 字段
 ALTER TABLE "Chat" ADD COLUMN IF NOT EXISTS "lastContext" jsonb;
-

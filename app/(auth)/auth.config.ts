@@ -1,6 +1,6 @@
-import type { NextAuthConfig } from "next-auth";
+import type { NextAuthConfig } from "next-auth"
 
-export const authConfig = {
+export const authConfig: NextAuthConfig = {
   pages: {
     signIn: "/login",
     newUser: "/",
@@ -22,4 +22,4 @@ export const authConfig = {
   debug: process.env.NODE_ENV === "development",
   // 信任代理（Cloudflare 等反向代理）
   trustHost: true,
-} satisfies NextAuthConfig;
+}

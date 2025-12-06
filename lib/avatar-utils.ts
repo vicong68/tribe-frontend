@@ -148,4 +148,3 @@ export function isRemoteUserMessage(
   // 但 communicationType 是 user_user（表示这是用户-用户对话）
   return role === "assistant" && communicationType === "user_user";
 }
-

@@ -46,7 +46,7 @@
 
 需要在 `.env.local` 中添加以下配置：
 
-```env
+\`\`\`env
 # MinIO Configuration (必需)
 MINIO_ENDPOINT=http://localhost:9000
 MINIO_ACCESS_KEY=minioadmin
@@ -68,40 +68,40 @@ ENABLE_FILE_COMPRESSION=false
 
 # 文件压缩质量（0-100，仅对图片有效，默认 80）
 FILE_COMPRESSION_QUALITY=80
-```
+\`\`\`
 
 ## API 兼容性
 
 文件上传 API 保持向后兼容：
 
 **请求：**
-```typescript
+\`\`\`typescript
 POST /api/files/upload
 Content-Type: multipart/form-data
 Body: { file: File }
-```
+\`\`\`
 
 **响应：**
-```typescript
+\`\`\`typescript
 {
   url: string;        // 文件访问 URL
   pathname: string;   // 文件路径（键）
   contentType: string; // 文件类型
 }
-```
+\`\`\`
 
 ## 文件存储结构
 
 文件在 MinIO 中的存储结构：
 
-```
+\`\`\`
 tribe-files/
 ├── users/
 │   └── {userId}/
 │       └── {timestamp}-{random}-{filename}.{ext}
 └── uploads/
     └── {timestamp}-{random}-{filename}.{ext}
-```
+\`\`\`
 
 ## 功能特性
 
@@ -114,9 +114,9 @@ tribe-files/
 ## 部署步骤
 
 1. **安装依赖**：
-   ```bash
+   \`\`\`bash
    pnpm install
-   ```
+   \`\`\`
 
 2. **配置环境变量**：
    在 `.env.local` 中添加 MinIO 配置
@@ -131,9 +131,9 @@ tribe-files/
    如果需要公开访问，设置存储桶策略为公开读取
 
 6. **重启前端服务**：
-   ```bash
+   \`\`\`bash
    pnpm dev
-   ```
+   \`\`\`
 
 ## 测试验证
 
@@ -181,4 +181,3 @@ tribe-files/
 - [MinIO 官方文档](https://min.io/docs)
 - [AWS S3 SDK 文档](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/clients/client-s3/)
 - [MINIO_SETUP.md](./MINIO_SETUP.md) - MinIO 配置指南
-

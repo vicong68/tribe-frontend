@@ -158,4 +158,3 @@ export function getMinIOClient(): MinIOClient {
   }
   return minioClient;
 }
-

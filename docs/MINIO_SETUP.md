@@ -6,7 +6,7 @@
 
 在 `.env.local` 文件中添加以下 MinIO 配置：
 
-```env
+\`\`\`env
 # MinIO Configuration (S3-compatible object storage)
 # MinIO 服务端点（本地或远程）
 MINIO_ENDPOINT=http://localhost:9000
@@ -21,13 +21,13 @@ MINIO_BUCKET=tribe-files
 # MinIO 公开访问 URL（用于生成文件访问链接）
 # 如果使用 Nginx 反向代理，设置为代理后的 URL
 MINIO_PUBLIC_URL=http://localhost:9000
-```
+\`\`\`
 
 ## 安装和启动 MinIO
 
 ### 使用 Docker（推荐）
 
-```bash
+\`\`\`bash
 docker run -d \
   -p 9000:9000 \
   -p 9001:9001 \
@@ -36,17 +36,17 @@ docker run -d \
   -e "MINIO_ROOT_PASSWORD=minioadmin" \
   -v /path/to/data:/data \
   minio/minio server /data --console-address ":9001"
-```
+\`\`\`
 
 ### 使用二进制文件
 
 1. 下载 MinIO：https://min.io/download
 2. 启动 MinIO：
-```bash
+\`\`\`bash
 export MINIO_ROOT_USER=minioadmin
 export MINIO_ROOT_PASSWORD=minioadmin
 minio server /path/to/data --console-address ":9001"
-```
+\`\`\`
 
 ## 创建存储桶
 
@@ -57,7 +57,7 @@ minio server /path/to/data --console-address ":9001"
    - 进入存储桶设置
    - 选择 "Access Policy"
    - 设置为 "Public" 或使用以下 JSON 策略：
-   ```json
+   \`\`\`json
    {
      "Version": "2012-10-17",
      "Statement": [
@@ -69,7 +69,7 @@ minio server /path/to/data --console-address ":9001"
        }
      ]
    }
-   ```
+   \`\`\`
 
 ## 生产环境配置
 
@@ -77,7 +77,7 @@ minio server /path/to/data --console-address ":9001"
 
 如果使用 Nginx 作为反向代理，配置示例：
 
-```nginx
+\`\`\`nginx
 server {
     listen 80;
     server_name files.yourdomain.com;
@@ -90,7 +90,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-```
+\`\`\`
 
 然后设置 `MINIO_PUBLIC_URL=http://files.yourdomain.com`
 
@@ -140,4 +140,3 @@ server {
 - `lib/storage/minio-client.ts` - MinIO 客户端工具类
 - `app/(chat)/api/files/upload/route.ts` - 文件上传路由
 - `next.config.ts` - Next.js 配置（图片域名）
-
