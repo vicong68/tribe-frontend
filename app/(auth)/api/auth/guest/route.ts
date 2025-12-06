@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -9,10 +10,24 @@ export async function GET(request: Request) {
     redirectUrl = "/"
   }
 
-  // In the v0 preview environment, NextAuth cannot work properly because:
-  // 1. No PostgreSQL database connection
-  // 2. bcrypt-ts doesn't work in browser environment
-  // 3. No backend API available
-  // For production, this route would use signIn("guest") from auth.ts
+  if (!process.env.POSTGRES_URL) {
+    const cookieStore = await cookies()
+    const mockSession = {
+      user: {
+        id: "preview-guest-user",
+        email: "guest@preview.local",
+        name: "Preview Guest",
+      },
+    }
+
+    // Set a mock session cookie that the preview session provider can read
+    cookieStore.set("preview-session", JSON.stringify(mockSession), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+    })
+  }
+
   return NextResponse.redirect(new URL(redirectUrl, request.url))
 }
