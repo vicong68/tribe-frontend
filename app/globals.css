@@ -30,7 +30,6 @@
   --chart-5: hsl(27 87% 67%);
   --radius: 0.5rem;
   --sidebar: hsl(0 0% 98%);
-  --sidebar-background: hsl(0 0% 98%);
   --sidebar-foreground: hsl(240 5.3% 26.1%);
   --sidebar-primary: hsl(240 5.9% 10%);
   --sidebar-primary-foreground: hsl(0 0% 98%);
@@ -66,7 +65,6 @@
   --chart-4: hsl(280 65% 60%);
   --chart-5: hsl(340 75% 55%);
   --sidebar: hsl(240 5.9% 10%);
-  --sidebar-background: hsl(240 5.9% 10%);
   --sidebar-foreground: hsl(240 4.8% 95.9%);
   --sidebar-primary: hsl(224.3 76.3% 48%);
   --sidebar-primary-foreground: hsl(0 0% 100%);
@@ -79,7 +77,6 @@
 @theme inline {
   --font-sans: var(--font-geist);
   --font-mono: var(--font-geist-mono);
-  --breakpoint-toast-mobile: 600px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -132,44 +129,26 @@
   }
 }
 
-/* User's custom source for streamdown */
-@source '../node_modules/streamdown/dist/index.js';
-
-/* User's custom plugins */
-@plugin "@tailwindcss/typography";
-
-/* User's custom utility classes */
-@utility text-balance {
-  text-wrap: balance;
-}
-
-@utility -webkit-overflow-scrolling-touch {
-  -webkit-overflow-scrolling: touch;
-}
-
-@utility touch-pan-y {
-  touch-action: pan-y;
-}
-
-@utility overscroll-behavior-contain {
-  overscroll-behavior: contain;
-}
-
 /* Skeleton loading styles */
-.skeleton {
-  * {
-    pointer-events: none !important;
-  }
-  *[class^="text-"] {
-    color: transparent;
-    @apply rounded-md bg-foreground/20 select-none animate-pulse;
-  }
-  .skeleton-bg {
-    @apply bg-foreground/10;
-  }
-  .skeleton-div {
-    @apply bg-foreground/20 animate-pulse;
-  }
+.skeleton * {
+  pointer-events: none !important;
+}
+
+.skeleton *[class^="text-"] {
+  color: transparent;
+  background-color: hsl(240 10% 3.9% / 0.2);
+  border-radius: 0.375rem;
+  user-select: none;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.skeleton .skeleton-bg {
+  background-color: hsl(240 10% 3.9% / 0.1);
+}
+
+.skeleton .skeleton-div {
+  background-color: hsl(240 10% 3.9% / 0.2);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 /* ProseMirror editor */
@@ -180,38 +159,51 @@
 /* CodeMirror editor styles */
 .cm-editor,
 .cm-gutters {
-  @apply bg-background! dark:bg-zinc-800! outline-hidden! selection:bg-zinc-900!;
+  background-color: var(--background) !important;
+  outline: none !important;
 }
 
-.ͼo.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
-.ͼo.cm-selectionBackground,
-.ͼo.cm-content::selection {
-  @apply bg-zinc-200! dark:bg-zinc-900!;
+.dark .cm-editor,
+.dark .cm-gutters {
+  background-color: hsl(240 5% 12%) !important;
 }
 
 .cm-activeLine,
 .cm-activeLineGutter {
-  @apply bg-transparent!;
+  background-color: transparent !important;
 }
 
 .cm-activeLine {
-  @apply rounded-r-sm!;
+  border-radius: 0 0.125rem 0.125rem 0 !important;
 }
 
 .cm-lineNumbers {
-  @apply min-w-7;
+  min-width: 1.75rem;
 }
 
 .cm-foldGutter {
-  @apply min-w-3;
+  min-width: 0.75rem;
 }
 
 .cm-lineNumbers .cm-activeLineGutter {
-  @apply rounded-l-sm!;
+  border-radius: 0.125rem 0 0 0.125rem !important;
 }
 
 .suggestion-highlight {
-  @apply bg-blue-200 hover:bg-blue-300 dark:hover:bg-blue-400/50 dark:text-blue-50 dark:bg-blue-500/40;
+  background-color: hsl(217 91% 80%);
+}
+
+.suggestion-highlight:hover {
+  background-color: hsl(217 91% 70%);
+}
+
+.dark .suggestion-highlight {
+  background-color: hsl(217 91% 40% / 0.4);
+  color: hsl(217 91% 95%);
+}
+
+.dark .suggestion-highlight:hover {
+  background-color: hsl(217 91% 50% / 0.5);
 }
 
 /* Minimal scrollbar styling */
@@ -242,4 +234,14 @@
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
