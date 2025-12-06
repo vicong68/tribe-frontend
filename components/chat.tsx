@@ -25,6 +25,7 @@ import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
+import { useSSEMessageContext } from "./websocket-message-provider";
 
 export function Chat({
   id,
@@ -214,10 +215,98 @@ export function Chat({
     messages,
   });
 
+  // 获取 SSE 消息上下文（用于接收用户-用户消息）
+  const { onMessage: onSSEMessage } = useSSEMessageContext();
+
   // 更新 messagesRef 以跟踪最新的消息列表
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // 处理 SSE 中的用户-用户消息
+  useEffect(() => {
+    const unsubscribe = onSSEMessage((sseMessage) => {
+      // 只处理用户-用户消息
+      if (sseMessage.communication_type !== "user_user") {
+        return;
+      }
+
+      // 检查消息是否已经存在（避免重复添加）
+      const existingMessage = messages.find(
+        (msg) =>
+          msg.metadata?.senderId === sseMessage.sender_id &&
+          msg.metadata?.receiverId === sseMessage.receiver_id &&
+          msg.role === "assistant" &&
+          msg.metadata?.communicationType === "user_user" &&
+          (msg.parts?.[0] as any)?.text === sseMessage.content
+      );
+
+      if (existingMessage) {
+        return;
+      }
+
+      // 将 SSE 消息转换为 ChatMessage 格式
+      const parts: any[] = [];
+      
+      // 添加文件附件（如果有）
+      if (sseMessage.file_attachment) {
+        parts.push({
+          type: "file" as const,
+          url: sseMessage.file_attachment.download_url || sseMessage.file_attachment.file_id,
+          name: sseMessage.file_attachment.file_name || "file",
+          mediaType: sseMessage.file_attachment.file_type || "application/octet-stream",
+        });
+      }
+      
+      // 添加文本内容（如果有）
+      if (sseMessage.content && sseMessage.content !== "[FILE_TRANSFER]") {
+        parts.push({
+          type: "text" as const,
+          text: sseMessage.content,
+        });
+      }
+      
+      const chatMessage: ChatMessage = {
+        id: generateUUID(),
+        role: "assistant",
+        parts,
+        metadata: {
+          createdAt: sseMessage.created_at || new Date().toISOString(),
+          senderId: sseMessage.sender_id,
+          senderName: sseMessage.sender_name,
+          receiverId: sseMessage.receiver_id,
+          receiverName: sseMessage.receiver_name,
+          communicationType: "user_user",
+        },
+      };
+
+      // 添加到消息列表
+      setMessages((prevMessages) => {
+        // 检查是否已存在（再次检查，避免重复）
+        const alreadyExists = prevMessages.some(
+          (msg) =>
+            msg.metadata?.senderId === chatMessage.metadata?.senderId &&
+            msg.metadata?.receiverId === chatMessage.metadata?.receiverId &&
+            msg.role === "assistant" &&
+            msg.metadata?.communicationType === "user_user" &&
+            (msg.parts?.[0] as any)?.text === sseMessage.content
+        );
+
+        if (alreadyExists) {
+          return prevMessages;
+        }
+
+        return [...prevMessages, chatMessage];
+      });
+
+      // 保存到数据库
+      saveAssistantMessages([chatMessage]).catch((error) => {
+        console.error("[Chat] Failed to save SSE message to database:", error);
+      });
+    });
+
+    return unsubscribe;
+  }, [onSSEMessage, messages, setMessages, saveAssistantMessages]);
 
   // 固化历史消息：当 messages 更新时，保存所有历史消息（除当前流式消息外）
   // 这可以防止 useChat 在处理流式响应时意外移除历史消息
