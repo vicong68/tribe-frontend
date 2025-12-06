@@ -532,20 +532,6 @@ function PureModelSelectorCompact({
   const { models: chatModels } = useChatModels(isLoggedIn);
 
   // 调试日志（仅在开发环境且关键状态变化时输出，减少日志噪音）
-  const prevStateRef = useRef<{ userType?: string; isLoggedIn?: boolean; chatModelsCount?: number }>({});
-  useEffect(() => {
-    if (process.env.NODE_ENV === "development") {
-      const prevState = prevStateRef.current;
-      // 仅在关键状态变化时输出日志
-      if (
-        prevState.userType !== userType ||
-        prevState.isLoggedIn !== isLoggedIn ||
-        (prevState.chatModelsCount === 0 && chatModels.length > 0)
-      ) {
-        prevStateRef.current = { userType, isLoggedIn, chatModelsCount: chatModels.length };
-      }
-    }
-  }, [userType, isLoggedIn, chatModels.length]);
 
   useEffect(() => {
     setOptimisticModelId(selectedModelId);

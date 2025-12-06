@@ -21,7 +21,9 @@ function getMinIOImageConfig() {
 const minioConfig = getMinIOImageConfig();
 
 const nextConfig: NextConfig = {
+  // 启用组件缓存，提升性能
   cacheComponents: true,
+  
   images: {
     remotePatterns: [
       {
@@ -34,11 +36,16 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  
   // 将 AWS SDK 相关包标记为外部包，避免打包到客户端
+  // 参考 Vercel AI SDK 最佳实践：https://sdk.vercel.ai/docs/guides/deployment
   serverExternalPackages: [
     "@aws-sdk/client-s3",
     "@aws-sdk/s3-request-presigner",
   ],
+  
+  // 优化：启用 React 严格模式，帮助发现潜在问题
+  reactStrictMode: true,
 };
 
 export default nextConfig;

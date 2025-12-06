@@ -13,12 +13,10 @@ export function useNetworkStatus() {
 
   useEffect(() => {
     const handleOnline = () => {
-      console.log("[Network] 网络已连接");
       setIsOnline(true);
     };
 
     const handleOffline = () => {
-      console.log("[Network] 网络已断开");
       setIsOnline(false);
     };
 

@@ -87,6 +87,9 @@ async function getAgentOrUserName(
   return null;
 }
 
+// 优化：根据 Vercel AI SDK 最佳实践，设置合理的超时时间
+// 参考：https://sdk.vercel.ai/docs/guides/streaming
+// 60秒适合长对话和复杂推理场景
 export const maxDuration = 60;
 
 export async function POST(request: Request) {

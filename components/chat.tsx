@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, startTransition } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -93,7 +93,9 @@ export function Chat({
   } = useStreamChatWithRetry<ChatMessage>({
     id,
     messages: initialMessages,
-    experimental_throttle: 100,
+    // 优化流式响应性能：使用 50ms throttle 平衡流畅度和性能
+    // 参考 Vercel AI SDK 最佳实践：https://sdk.vercel.ai/docs/reference/ai-sdk-ui/use-chat
+    experimental_throttle: 50,
     generateId: () => {
       // 如果有预生成的 ID，使用它；否则生成新的并存储到 ref 中
       // 注意：generateId 可能在 prepareSendMessagesRequest 之前被调用
@@ -130,16 +132,6 @@ export function Chat({
       },
     }),
     onData: (dataPart: any) => {
-      // 详细日志：追踪 onData 事件
-      if (process.env.NODE_ENV === "development") {
-        console.log("[onData] 收到数据事件:", dataPart.type, dataPart);
-        if (dataPart.type === "text-start") {
-          console.log("[onData] ⚠️ text-start 事件到达，此时 messages 数量:", messages.length);
-          console.log("[onData] 当前 messages:", messages.map(m => ({ id: m.id, role: m.role })));
-          console.log("[onData] 固化的历史消息:", frozenHistoryMessagesRef.current.map(m => ({ id: m.id, role: m.role })));
-        }
-      }
-      
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
       if (dataPart.type === "data-usage") {
         setUsage(dataPart.data);
@@ -155,18 +147,42 @@ export function Chat({
       // 
       // 客户端保存只作为兜底机制，在页面加载时通过 useMessagePersistence 检查恢复
       
-      // 刷新聊天历史列表
-      mutate(unstable_serialize(getChatHistoryPaginationKey));
+      // 刷新聊天历史列表（使用 startTransition 优化性能）
+      startTransition(() => {
+        mutate(unstable_serialize(getChatHistoryPaginationKey));
+      });
       // 更新对话状态为 idle
       conversationManager.updateStatus("idle");
     },
     onError: (error) => {
       // 更新对话状态为 idle（错误时）
       conversationManager.updateStatus("idle");
+      
+      // 根据错误类型提供更友好的错误提示
       if (error instanceof ChatSDKError) {
         toast({
           type: "error",
           description: error.message,
+        });
+      } else if (error instanceof Error) {
+        // 网络错误或未知错误
+        const errorMessage = error.message || "发生未知错误";
+        const isNetworkError = 
+          errorMessage.includes("network") ||
+          errorMessage.includes("fetch") ||
+          errorMessage.includes("offline") ||
+          errorMessage.includes("Failed to fetch");
+        
+        toast({
+          type: "error",
+          description: isNetworkError 
+            ? "网络连接失败，请检查网络后重试" 
+            : `错误：${errorMessage}`,
+        });
+      } else {
+        toast({
+          type: "error",
+          description: "发生未知错误，请稍后重试",
         });
       }
     },
@@ -195,43 +211,17 @@ export function Chat({
     const messagesLength = messages.length;
     const lastLength = lastMessagesLengthRef.current;
     
-    // 详细日志
-    if (process.env.NODE_ENV === "development") {
-      console.log("[消息固化] ===== 消息状态变化 =====");
-      console.log("[消息固化] status:", lastStreamingStatusRef.current, "->", status);
-      console.log("[消息固化] messages 数量:", lastLength, "->", messagesLength);
-      console.log("[消息固化] 当前消息列表:", messages.map(m => ({ id: m.id, role: m.role, hasMetadata: !!m.metadata })));
-      console.log("[消息固化] 固化的历史消息数量:", frozenHistoryMessagesRef.current.length);
-      console.log("[消息固化] 固化的历史消息:", frozenHistoryMessagesRef.current.map(m => ({ id: m.id, role: m.role })));
-    }
-    
     // 关键：在消息数量增加时（用户发送消息后），立即固化
     // 这确保在 useChat 处理 text-start 之前，用户消息已经被固化
     if (messagesLength > lastLength && !isStreaming) {
       // 消息数量增加且不在流式传输中，立即固化（用户刚发送消息）
       frozenHistoryMessagesRef.current = [...messages];
-      if (process.env.NODE_ENV === "development") {
-        console.log("[消息固化] ✅ 用户消息发送后立即固化，消息数量:", messagesLength);
-      }
     } else if (!wasStreaming && isStreaming) {
       // 从非 streaming 状态进入 streaming 状态时，固化当前所有消息为历史消息
       frozenHistoryMessagesRef.current = [...messages];
-      if (process.env.NODE_ENV === "development") {
-        console.log("[消息固化] ✅ 进入流式传输状态，固化消息，消息数量:", messagesLength);
-      }
     } else if (wasStreaming && !isStreaming && messagesLength > 0) {
       // 流式传输结束，更新固化的历史消息（包含新完成的消息）
       frozenHistoryMessagesRef.current = [...messages];
-      if (process.env.NODE_ENV === "development") {
-        console.log("[消息固化] ✅ 流式传输结束，更新固化消息，消息数量:", messagesLength);
-      }
-    } else if (messagesLength < lastLength && isStreaming) {
-      // ⚠️ 警告：在流式传输中，消息数量减少（可能有问题）
-      if (process.env.NODE_ENV === "development") {
-        console.warn("[消息固化] ⚠️ 警告：流式传输中消息数量减少！", lastLength, "->", messagesLength);
-        console.warn("[消息固化] 当前消息:", messages.map(m => ({ id: m.id, role: m.role })));
-        console.warn("[消息固化] 固化的历史消息:", frozenHistoryMessagesRef.current.map(m => ({ id: m.id, role: m.role })));
-      }
     }
     
     lastStreamingStatusRef.current = status;
@@ -247,15 +237,6 @@ export function Chat({
     if (!dataStream || dataStream.length === 0) return;
 
     const appendMessageEvents = dataStream.filter((part) => part.type === "data-appendMessage");
-    
-    // 详细日志：追踪 dataStream 变化
-    if (process.env.NODE_ENV === "development" && appendMessageEvents.length > 0) {
-      console.log("[data-appendMessage] ===== 检测到 data-appendMessage 事件 =====");
-      console.log("[data-appendMessage] 事件数量:", appendMessageEvents.length);
-      console.log("[data-appendMessage] 当前 messages 数量:", messages.length);
-      console.log("[data-appendMessage] 当前 messages:", messages.map(m => ({ id: m.id, role: m.role })));
-    }
-    
     if (appendMessageEvents.length === 0) return;
 
     appendMessageEvents.forEach((dataPart) => {
@@ -281,14 +262,6 @@ export function Chat({
               (lastMessage.id === messageWithMetadata.id || 
                lastMessage.metadata?.originalMessageId === messageWithMetadata.id);
             
-            // 详细日志
-            if (process.env.NODE_ENV === "development") {
-              console.log("[data-appendMessage] ===== 处理 metadata 更新 =====");
-              console.log("[data-appendMessage] messageWithMetadata:", { id: messageWithMetadata.id, role: messageWithMetadata.role });
-              console.log("[data-appendMessage] prevMessages 数量:", prevMessages.length);
-              console.log("[data-appendMessage] prevMessages:", prevMessages.map(m => ({ id: m.id, role: m.role })));
-            }
-            
             // 2. 保护历史消息：合并固化的历史消息和当前消息列表
             //    确保即使用户消息在 prevMessages 中被移除，也能恢复
             const frozenHistory = frozenHistoryMessagesRef.current;
@@ -302,27 +275,10 @@ export function Chat({
               !(isStreaming && lastMessage && msg.id === lastMessage.id)
             );
             
-            // 详细日志：检查是否有消息丢失
-            if (process.env.NODE_ENV === "development") {
-              if (missingHistoryMessages.length > 0) {
-                console.warn("[data-appendMessage] ⚠️ 发现被移除的历史消息！", missingHistoryMessages.map(m => ({ id: m.id, role: m.role })));
-                console.warn("[data-appendMessage] 当前消息ID:", Array.from(currentMessageIds));
-                console.warn("[data-appendMessage] 固化消息ID:", Array.from(frozenMessageIds));
-              } else {
-                console.log("[data-appendMessage] ✅ 没有发现被移除的消息");
-              }
-            }
-            
             // 合并：当前消息列表 + 被移除的历史消息
             const preservedMessages = missingHistoryMessages.length > 0
               ? [...prevMessages, ...missingHistoryMessages]
               : prevMessages;
-            
-            // 详细日志：恢复后的消息
-            if (process.env.NODE_ENV === "development" && missingHistoryMessages.length > 0) {
-              console.log("[data-appendMessage] ✅ 恢复后的消息数量:", preservedMessages.length);
-              console.log("[data-appendMessage] 恢复后的消息:", preservedMessages.map(m => ({ id: m.id, role: m.role })));
-            }
             
             // 3. 查找要更新的消息（仅限当前消息或匹配的历史消息）
             let targetMessageIndex = -1;
@@ -385,20 +341,9 @@ export function Chat({
   const sendMessage = useCallback((message: any) => {
     // 在发送消息前，立即固化当前所有消息
     // 这确保在 useChat 处理 text-start 之前，用户消息已经被固化
-    if (process.env.NODE_ENV === "development") {
-      console.log("[sendMessage] ===== 发送消息前固化 =====");
-      console.log("[sendMessage] 当前 messages 数量:", messages.length);
-      console.log("[sendMessage] 当前 messages:", messages.map(m => ({ id: m.id, role: m.role })));
-    }
-    
-    // 立即固化当前所有消息（包括即将发送的用户消息）
     // 注意：useChat 会在 sendMessage 调用后立即添加用户消息到 messages
     // 但我们在发送前固化，然后在 useEffect 中会再次固化（包含新消息）
     frozenHistoryMessagesRef.current = [...messages];
-    
-    if (process.env.NODE_ENV === "development") {
-      console.log("[sendMessage] ✅ 消息已固化，数量:", frozenHistoryMessagesRef.current.length);
-    }
     
     // 调用原始的 sendMessage
     return originalSendMessage(message);
@@ -467,7 +412,15 @@ export function Chat({
           votes={votes}
         />
 
-        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+          {/* 重试状态提示 */}
+          {isRetrying && (
+            <div className="flex items-center gap-2 rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
+              <div className="size-2 animate-pulse rounded-full bg-yellow-500" />
+              <span>正在重试发送消息...</span>
+            </div>
+          )}
+          
           {!isReadonly && (
             <MultimodalInput
               attachments={attachments}

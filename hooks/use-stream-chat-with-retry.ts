@@ -2,6 +2,7 @@
 
 import { useChat, type UseChatOptions } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
+import { DefaultChatTransport } from "ai";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useNetworkStatus } from "./use-network-status";
 import type { ChatMessage } from "@/lib/types";
@@ -12,10 +13,12 @@ import type { ChatMessage } from "@/lib/types";
  * 注意：AI SDK 的 onFinish 回调可能接收不同的参数类型
  * 为了兼容性，我们使用更灵活的类型定义
  */
-type ExtendedUseChatOptions<T extends UIMessage = ChatMessage> = Omit<UseChatOptions<T>, 'onFinish' | 'onError'> & {
+type ExtendedUseChatOptions<T extends UIMessage = ChatMessage> = Omit<UseChatOptions<T>, 'onFinish' | 'onError' | 'onData'> & {
   id?: string;
   onError?: (error: Error) => void;
   onFinish?: () => void | Promise<void>;
+  onData?: (data: any) => void;
+  transport?: DefaultChatTransport;
 } & {
   messages?: T[];
   generateId?: () => string;
@@ -38,8 +41,11 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isOnline = useNetworkStatus();
 
+  // 重试配置：遵循指数退避策略
+  // 参考 Vercel AI SDK 最佳实践：https://sdk.vercel.ai/docs/guides/error-handling
   const maxRetries = 3;
-  const baseRetryDelay = 1000;
+  const baseRetryDelay = 1000; // 1秒
+  const maxRetryDelay = 10000; // 最大10秒
   
   const chat = useChat<T>({
     ...options,
@@ -49,15 +55,28 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
       // 检查错误类型，只对网络错误和服务器错误（5xx）进行重试
       // 不重试客户端错误（4xx），如 bad_request, unauthorized, forbidden 等
       const errorMessage = error?.message || "";
-      const isRetryableError =
+      const errorName = error?.name || "";
+      
+      // 更精确的错误分类
+      const isNetworkError = 
         errorMessage.includes("network") ||
         errorMessage.includes("fetch") ||
         errorMessage.includes("offline") ||
-        errorMessage.includes("timeout") ||
+        errorMessage.includes("Failed to fetch") ||
+        errorName === "NetworkError" ||
+        errorName === "TypeError";
+      
+      const isServerError = 
         errorMessage.includes("500") ||
         errorMessage.includes("502") ||
         errorMessage.includes("503") ||
         errorMessage.includes("504");
+      
+      const isTimeoutError = 
+        errorMessage.includes("timeout") ||
+        errorMessage.includes("aborted");
+      
+      const isRetryableError = isNetworkError || isServerError || isTimeoutError;
 
       // 如果是可重试的错误且未达到最大重试次数，尝试重试
       if (
@@ -67,7 +86,11 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
         lastMessageRef.current &&
         !isRetrying
       ) {
-        const delay = baseRetryDelay * Math.pow(2, retryCount);
+        // 指数退避：1s, 2s, 4s，但不超过最大延迟
+        const delay = Math.min(
+          baseRetryDelay * Math.pow(2, retryCount),
+          maxRetryDelay
+        );
 
         setIsRetrying(true);
         retryTimeoutRef.current = setTimeout(() => {
@@ -78,6 +101,7 @@ export function useStreamChatWithRetry<T extends ChatMessage = ChatMessage>(
           }
         }, delay);
       } else {
+        // 不可重试的错误或达到最大重试次数，调用用户提供的错误处理
         if (options.onError) {
           options.onError(error);
         }

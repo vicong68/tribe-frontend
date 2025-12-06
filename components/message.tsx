@@ -2,7 +2,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { useSession } from "next-auth/react";
-import { memo, useState, useEffect, useRef } from "react";
+import { memo, useState, useRef } from "react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
@@ -414,47 +414,9 @@ const PurePreviewMessage = ({
   // 如果消息内容为空，不渲染整个消息
   const messageContent = renderMessageContent();
   
-  // 详细日志：追踪所有用户消息的渲染（特别是最后一条）
-  if (process.env.NODE_ENV === "development") {
-    const isLastUserMessage = message.role === "user" && message.id === "4d6c2dcf-60ff-4a63-bc63-3727ebea6879";
-    if (isLocalUser || isLastUserMessage) {
-      console.log("[PreviewMessage] 用户消息渲染检查:", {
-        id: message.id,
-        role: message.role,
-        isLocalUser,
-        hasContent: !!messageContent,
-        messageContentType: messageContent ? typeof messageContent : "null",
-        parts: message.parts,
-        partsCount: messageParts.length,
-        hasValidText: messageParts.some(
-          (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
-        ),
-        willRender: !!messageContent || isLocalUser,
-      });
-    }
-  }
-  
   if (!messageContent) {
-    // 详细日志：记录不渲染的消息
-    if (process.env.NODE_ENV === "development") {
-      console.warn("[PreviewMessage] ⚠️ 消息内容为空，不渲染:", {
-        id: message.id,
-        role: message.role,
-        isLocalUser,
-        parts: message.parts,
-        hasValidText: messageParts.some(
-          (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
-        ),
-        hasAttachments: attachmentsFromMessage.length > 0,
-      });
-    }
     // 用户消息即使内容为空也渲染（显示占位符）
     if (isLocalUser) {
-      // 用户消息应该总是有内容，如果为空可能是渲染逻辑问题
-      console.error("[PreviewMessage] ❌ 用户消息内容为空，但应该总是有内容！", {
-        id: message.id,
-        parts: message.parts,
-      });
       // 返回一个占位符消息，确保用户消息可见
       return (
         <div className="flex items-start gap-3">
@@ -493,70 +455,7 @@ const PurePreviewMessage = ({
     </div>
   );
 
-  // 详细日志：追踪消息组件的渲染（特别是最后一条用户消息）
-  if (process.env.NODE_ENV === "development") {
-    const isLastUserMessage = message.role === "user" && message.id === "4d6c2dcf-60ff-4a63-bc63-3727ebea6879";
-    if (isLocalUser || isLastUserMessage) {
-      console.log("[PreviewMessage] 渲染消息组件:", {
-        id: message.id,
-        role: message.role,
-        isLocalUser,
-        hasContent: !!messageContent,
-        messageContentType: messageContent ? typeof messageContent : "null",
-        key: message.id,
-        className: "group/message fade-in w-full animate-in duration-200",
-        willReturnNull: !messageContent && !isLocalUser,
-      });
-    }
-  }
-
-  // 使用 useEffect 追踪消息的 DOM 渲染状态
   const messageRef = useRef<HTMLDivElement>(null);
-  
-  useEffect(() => {
-    if (process.env.NODE_ENV === "development" && messageRef.current) {
-      const isLastUserMessage = message.role === "user" && message.id === "4d6c2dcf-60ff-4a63-bc63-3727ebea6879";
-      if (isLocalUser || isLastUserMessage) {
-        const element = messageRef.current;
-        const rect = element.getBoundingClientRect();
-        const isVisible = rect.width > 0 && rect.height > 0;
-        const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
-        const computedStyle = window.getComputedStyle(element);
-        
-        console.log("[PreviewMessage] DOM 渲染状态:", {
-          id: message.id,
-          role: message.role,
-          isLocalUser,
-          isVisible,
-          isInViewport,
-          rect: {
-            top: rect.top,
-            bottom: rect.bottom,
-            left: rect.left,
-            right: rect.right,
-            width: rect.width,
-            height: rect.height,
-          },
-          computedStyle: {
-            display: computedStyle.display,
-            visibility: computedStyle.visibility,
-            opacity: computedStyle.opacity,
-            height: computedStyle.height,
-            minHeight: computedStyle.minHeight,
-            maxHeight: computedStyle.maxHeight,
-            overflow: computedStyle.overflow,
-            zIndex: computedStyle.zIndex,
-          },
-          // 检查是否有隐藏样式
-          isHidden: computedStyle.display === "none" || 
-                   computedStyle.visibility === "hidden" || 
-                   parseFloat(computedStyle.opacity) === 0 ||
-                   rect.width === 0 ||
-                   rect.height === 0,
-        });
-      }
-    }
-  }, [message.id, message.role, isLocalUser, messageContent]);
 
   return (
     <div
