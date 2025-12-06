@@ -2,33 +2,25 @@ import NextAuth, { type DefaultSession } from "next-auth"
 import type { DefaultJWT } from "next-auth/jwt"
 import Credentials from "next-auth/providers/credentials"
 
-let compare: typeof import("bcrypt-ts").compare
-let createGuestUser: typeof import("@/lib/db/queries").createGuestUser
-let getUser: typeof import("@/lib/db/queries").getUser
-let createUser: typeof import("@/lib/db/queries").createUser
-let DUMMY_PASSWORD: string
+const isServerEnvironment = typeof process !== "undefined" && !!process.env.POSTGRES_URL
 
-// Check if we're in a proper server environment with database access
-const isServerEnvironment = typeof process !== "undefined" && process.env.POSTGRES_URL
-
-if (isServerEnvironment) {
-  try {
-    const bcrypt = await import("bcrypt-ts")
-    compare = bcrypt.compare
-    const queries = await import("@/lib/db/queries")
-    createGuestUser = queries.createGuestUser
-    getUser = queries.getUser
-    createUser = queries.createUser
-    const constants = await import("@/lib/constants")
-    DUMMY_PASSWORD = constants.DUMMY_PASSWORD
-  } catch (e) {
-    console.warn("[auth] Failed to load server modules:", e)
-  }
+// Lazy loaders for server-only modules
+const getCompare = async () => {
+  if (!isServerEnvironment) return async () => false
+  const { compare } = await import("bcrypt-ts")
+  return compare
 }
 
-// Fallback implementations for v0 preview
-const fallbackCompare = async () => false
-const fallbackDummyPassword = ""
+const getQueries = async () => {
+  if (!isServerEnvironment) return null
+  return import("@/lib/db/queries")
+}
+
+const getDummyPassword = async () => {
+  if (!isServerEnvironment) return ""
+  const { DUMMY_PASSWORD } = await import("@/lib/constants")
+  return DUMMY_PASSWORD
+}
 
 const authConfig = {
   pages: {
@@ -87,7 +79,7 @@ export const {
         password: { label: "密码", type: "password" },
       },
       async authorize(credentials) {
-        if (!isServerEnvironment || !compare) {
+        if (!isServerEnvironment) {
           console.warn("[auth] Server modules not available, returning null")
           return null
         }
@@ -98,6 +90,12 @@ export const {
 
         const email = String(credentials.email)
         const password = String(credentials.password)
+
+        const compare = await getCompare()
+        const queries = await getQueries()
+        const DUMMY_PASSWORD = await getDummyPassword()
+
+        if (!queries) return null
 
         try {
           const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:8000"
@@ -124,25 +122,25 @@ export const {
           })
 
           if (!response.ok) {
-            await compare(password, DUMMY_PASSWORD || fallbackDummyPassword)
+            await compare(password, DUMMY_PASSWORD)
             return null
           }
 
           const data = await response.json()
 
           if (!data.success || !data.user) {
-            await compare(password, DUMMY_PASSWORD || fallbackDummyPassword)
+            await compare(password, DUMMY_PASSWORD)
             return null
           }
 
-          let frontendUser = await getUser(email)
+          let frontendUser = await queries.getUser(email)
           if (frontendUser.length === 0) {
-            await createUser(email, "")
-            frontendUser = await getUser(email)
+            await queries.createUser(email, "")
+            frontendUser = await queries.getUser(email)
           }
 
           if (frontendUser.length === 0) {
-            await compare(password, DUMMY_PASSWORD || fallbackDummyPassword)
+            await compare(password, DUMMY_PASSWORD)
             return null
           }
 
@@ -157,7 +155,7 @@ export const {
           }
         } catch (error) {
           console.error("[Auth] 认证错误:", error)
-          await (compare || fallbackCompare)(password, DUMMY_PASSWORD || fallbackDummyPassword)
+          await compare(password, DUMMY_PASSWORD)
           return null
         }
       },
@@ -166,18 +164,28 @@ export const {
       id: "guest",
       credentials: {},
       async authorize() {
-        if (!isServerEnvironment || !createGuestUser) {
-          console.warn("[auth] Creating mock guest user for v0 preview")
+        if (!isServerEnvironment) {
           return {
             id: `guest-${Date.now()}`,
-            email: null,
+            email: `guest-${Date.now()}@guest.local`,
             name: "Guest",
             type: "guest" as const,
             memberId: null,
           }
         }
 
-        const [guestUser] = await createGuestUser()
+        const queries = await getQueries()
+        if (!queries) {
+          return {
+            id: `guest-${Date.now()}`,
+            email: `guest-${Date.now()}@guest.local`,
+            name: "Guest",
+            type: "guest" as const,
+            memberId: null,
+          }
+        }
+
+        const [guestUser] = await queries.createGuestUser()
         return {
           id: guestUser.id,
           email: guestUser.email || null,
