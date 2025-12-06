@@ -2,24 +2,39 @@ import NextAuth, { type DefaultSession } from "next-auth"
 import type { DefaultJWT } from "next-auth/jwt"
 import Credentials from "next-auth/providers/credentials"
 
-const isServerEnvironment = typeof process !== "undefined" && !!process.env.POSTGRES_URL
+const hasDatabase =
+  typeof process !== "undefined" && typeof process.env.POSTGRES_URL === "string" && process.env.POSTGRES_URL.length > 0
 
-// Lazy loaders for server-only modules
 const getCompare = async () => {
-  if (!isServerEnvironment) return async () => false
-  const { compare } = await import("bcrypt-ts")
-  return compare
+  if (!hasDatabase) return async () => false
+  try {
+    const { compare } = await import("bcrypt-ts")
+    return compare
+  } catch (error) {
+    console.error("[auth] Failed to load bcrypt-ts:", error)
+    return async () => false
+  }
 }
 
 const getQueries = async () => {
-  if (!isServerEnvironment) return null
-  return import("@/lib/db/queries")
+  if (!hasDatabase) return null
+  try {
+    return await import("@/lib/db/queries")
+  } catch (error) {
+    console.error("[auth] Failed to load db queries:", error)
+    return null
+  }
 }
 
 const getDummyPassword = async () => {
-  if (!isServerEnvironment) return ""
-  const { DUMMY_PASSWORD } = await import("@/lib/constants")
-  return DUMMY_PASSWORD
+  if (!hasDatabase) return ""
+  try {
+    const { DUMMY_PASSWORD } = await import("@/lib/constants")
+    return DUMMY_PASSWORD
+  } catch (error) {
+    console.error("[auth] Failed to load constants:", error)
+    return ""
+  }
 }
 
 const authConfig = {
@@ -79,8 +94,8 @@ export const {
         password: { label: "密码", type: "password" },
       },
       async authorize(credentials) {
-        if (!isServerEnvironment) {
-          console.warn("[auth] Server modules not available, returning null")
+        if (!hasDatabase) {
+          console.log("[auth] Database not available, blocking credentials login")
           return null
         }
 
@@ -91,13 +106,16 @@ export const {
         const email = String(credentials.email)
         const password = String(credentials.password)
 
-        const compare = await getCompare()
-        const queries = await getQueries()
-        const DUMMY_PASSWORD = await getDummyPassword()
-
-        if (!queries) return null
-
         try {
+          const compare = await getCompare()
+          const queries = await getQueries()
+          const DUMMY_PASSWORD = await getDummyPassword()
+
+          if (!queries) {
+            console.log("[auth] Queries not available")
+            return null
+          }
+
           const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:8000"
           const loginUrl = `${baseUrl}/api/auth/backend/login`
 
@@ -155,7 +173,6 @@ export const {
           }
         } catch (error) {
           console.error("[Auth] 认证错误:", error)
-          await compare(password, DUMMY_PASSWORD)
           return null
         }
       },
@@ -164,34 +181,47 @@ export const {
       id: "guest",
       credentials: {},
       async authorize() {
-        if (!isServerEnvironment) {
+        if (!hasDatabase) {
+          console.log("[auth] Creating mock guest user for preview environment")
           return {
-            id: `guest-${Date.now()}`,
-            email: `guest-${Date.now()}@guest.local`,
-            name: "Guest",
+            id: `guest-preview-${Date.now()}`,
+            email: `guest-${Date.now()}@preview.local`,
+            name: "Guest User",
             type: "guest" as const,
             memberId: null,
           }
         }
 
-        const queries = await getQueries()
-        if (!queries) {
+        try {
+          const queries = await getQueries()
+          if (!queries) {
+            console.log("[auth] Queries not available, creating mock guest")
+            return {
+              id: `guest-fallback-${Date.now()}`,
+              email: `guest-${Date.now()}@fallback.local`,
+              name: "Guest User",
+              type: "guest" as const,
+              memberId: null,
+            }
+          }
+
+          const [guestUser] = await queries.createGuestUser()
           return {
-            id: `guest-${Date.now()}`,
-            email: `guest-${Date.now()}@guest.local`,
+            id: guestUser.id,
+            email: guestUser.email || null,
             name: "Guest",
             type: "guest" as const,
             memberId: null,
           }
-        }
-
-        const [guestUser] = await queries.createGuestUser()
-        return {
-          id: guestUser.id,
-          email: guestUser.email || null,
-          name: "Guest",
-          type: "guest" as const,
-          memberId: null,
+        } catch (error) {
+          console.error("[auth] Error creating guest user:", error)
+          return {
+            id: `guest-error-${Date.now()}`,
+            email: `guest-${Date.now()}@error.local`,
+            name: "Guest User",
+            type: "guest" as const,
+            memberId: null,
+          }
         }
       },
     }),
