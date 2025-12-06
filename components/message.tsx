@@ -517,37 +517,53 @@ const PurePreviewMessage = ({
 export const PreviewMessage = memo(
   PurePreviewMessage,
   (prevProps, nextProps) => {
-    // 如果消息 ID 不同，需要重新渲染
+    // ===== 关键修复：优化 memo 比较函数，确保所有影响渲染的属性都被比较 =====
+    
+    // 1. 消息 ID 不同，需要重新渲染（不同消息）
     if (prevProps.message.id !== nextProps.message.id) {
       return false;
     }
     
-    // 如果 isLoading 状态变化，需要重新渲染
-    if (prevProps.isLoading !== nextProps.isLoading) {
-      return false;
-    }
-    
-    // 如果 requiresScrollPadding 变化，需要重新渲染
-    if (prevProps.requiresScrollPadding !== nextProps.requiresScrollPadding) {
-      return false;
-    }
-    
-    // 如果消息内容（parts）变化，需要重新渲染
+    // 2. 消息内容（parts）变化，需要重新渲染
+    // 使用深度比较，确保内容变化时重新渲染
     if (!equal(prevProps.message.parts, nextProps.message.parts)) {
       return false;
     }
     
-    // 如果 vote 变化，需要重新渲染
+    // 3. 消息 metadata 变化，需要重新渲染
+    // 关键：metadata 包含 senderName、agentUsed 等，影响发送者名称显示
+    // 在流式传输过程中，metadata 会通过 data-appendMessage 更新
+    if (!equal(prevProps.message.metadata, nextProps.message.metadata)) {
+      return false;
+    }
+    
+    // 4. isLoading 状态变化，需要重新渲染（影响加载状态显示）
+    if (prevProps.isLoading !== nextProps.isLoading) {
+      return false;
+    }
+    
+    // 5. requiresScrollPadding 变化，需要重新渲染（影响滚动行为）
+    if (prevProps.requiresScrollPadding !== nextProps.requiresScrollPadding) {
+      return false;
+    }
+    
+    // 6. vote 变化，需要重新渲染（影响投票按钮状态）
     if (!equal(prevProps.vote, nextProps.vote)) {
       return false;
     }
     
-    // 如果 selectedModelId 变化，可能影响发送者名称显示，需要重新渲染
+    // 7. selectedModelId 变化，可能影响发送者名称显示，需要重新渲染
+    // 在流式传输过程中，如果 metadata 为空，会使用 selectedModelId 作为临时名称
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {
       return false;
     }
     
-    // 其他情况：消息 ID、内容、状态都相同，可以复用组件（返回 true 表示相等，不需要重新渲染）
+    // 8. isReadonly 变化，需要重新渲染（影响编辑功能）
+    if (prevProps.isReadonly !== nextProps.isReadonly) {
+      return false;
+    }
+    
+    // 所有关键属性都相同，可以复用组件（返回 true 表示相等，不需要重新渲染）
     return true;
   }
 );

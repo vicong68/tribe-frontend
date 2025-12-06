@@ -113,6 +113,27 @@ export function Chat({
       api: "/api/chat",
       fetch: fetchWithErrorHandlers,
       prepareSendMessagesRequest(request) {
+        // ===== 关键修复：在 prepareSendMessagesRequest 中同步固化消息 =====
+        // 此时 request.messages 已包含用户消息，且在 useChat 处理 text-start 之前执行
+        // 这是最可靠的时机，确保用户消息在流式响应开始前被固化
+        
+        // 1. 同步固化所有消息（包括刚发送的用户消息）
+        // 注意：request.messages 是 UIMessage[]，需要转换为 ChatMessage[]
+        if (request.messages && request.messages.length > 0) {
+          // 使用 messagesRef.current 获取最新的消息列表（已包含用户消息）
+          // 因为此时 useChat 已经将用户消息添加到 messages 中
+          const currentMessages = messagesRef.current;
+          if (currentMessages.length > 0) {
+            frozenHistoryMessagesRef.current = [...currentMessages];
+            
+            // 2. 追踪最后一条用户消息（作为最后的恢复手段）
+            const lastMessage = currentMessages[currentMessages.length - 1];
+            if (lastMessage.role === "user") {
+              pendingUserMessageRef.current = lastMessage;
+            }
+          }
+        }
+        
         // 预生成 assistant 消息 ID，并存储到 ref 中
         // 这样 generateId 可以使用这个 ID，确保与后端匹配
         // 注意：必须在 generateId 被调用之前设置，所以在这里预生成
@@ -204,7 +225,12 @@ export function Chat({
   const lastStreamingStatusRef = useRef<string>("idle");
   const lastMessagesLengthRef = useRef<number>(0);
   
+  // 追踪刚发送的用户消息，作为最后的恢复手段
+  // 关键：在 prepareSendMessagesRequest 中同步设置，确保在 useChat 处理 text-start 之前已固化
+  const pendingUserMessageRef = useRef<ChatMessage | null>(null);
+  
   // 监听 messages 变化，在每次变化时都尝试固化（更早的时机）
+  // 注意：prepareSendMessagesRequest 中的同步固化是最关键的，这里的 useEffect 作为补充
   useEffect(() => {
     const isStreaming = status === "streaming";
     const wasStreaming = lastStreamingStatusRef.current === "streaming";
@@ -216,12 +242,34 @@ export function Chat({
     if (messagesLength > lastLength && !isStreaming) {
       // 消息数量增加且不在流式传输中，立即固化（用户刚发送消息）
       frozenHistoryMessagesRef.current = [...messages];
+      
+      // 同时更新 pendingUserMessage
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage.role === "user") {
+        pendingUserMessageRef.current = lastMessage;
+      }
     } else if (!wasStreaming && isStreaming) {
       // 从非 streaming 状态进入 streaming 状态时，固化当前所有消息为历史消息
       frozenHistoryMessagesRef.current = [...messages];
     } else if (wasStreaming && !isStreaming && messagesLength > 0) {
       // 流式传输结束，更新固化的历史消息（包含新完成的消息）
       frozenHistoryMessagesRef.current = [...messages];
+      // 清除 pendingUserMessage（消息已成功接收）
+      pendingUserMessageRef.current = null;
+    }
+    
+    // 额外检查：如果 pendingUserMessage 在 messages 中，确保它被正确保留
+    if (pendingUserMessageRef.current) {
+      const pendingMessage = pendingUserMessageRef.current;
+      const isPendingMessagePresent = messages.some(m => m.id === pendingMessage.id);
+      
+      if (!isPendingMessagePresent && isStreaming) {
+        // pendingUserMessage 丢失，尝试恢复
+        // 这会在 data-appendMessage 处理时被恢复
+      } else if (isPendingMessagePresent) {
+        // pendingUserMessage 已存在，可以清除（消息已成功接收）
+        // 但保留到流式传输结束，确保完全稳定
+      }
     }
     
     lastStreamingStatusRef.current = status;
@@ -275,12 +323,36 @@ export function Chat({
               !(isStreaming && lastMessage && msg.id === lastMessage.id)
             );
             
-            // 合并：当前消息列表 + 被移除的历史消息
-            const preservedMessages = missingHistoryMessages.length > 0
-              ? [...prevMessages, ...missingHistoryMessages]
-              : prevMessages;
+            // 3. 额外检查：如果 pendingUserMessage 丢失，也加入恢复列表
+            const pendingUserMessage = pendingUserMessageRef.current;
+            if (pendingUserMessage && !currentMessageIds.has(pendingUserMessage.id)) {
+              // 确保 pendingUserMessage 不在 missingHistoryMessages 中（避免重复）
+              const isAlreadyInMissing = missingHistoryMessages.some(m => m.id === pendingUserMessage.id);
+              if (!isAlreadyInMissing) {
+                missingHistoryMessages.push(pendingUserMessage);
+              }
+            }
             
-            // 3. 查找要更新的消息（仅限当前消息或匹配的历史消息）
+            // 合并：当前消息列表 + 被移除的历史消息
+            // 关键：确保用户消息插入到流式 assistant 消息之前，保证消息顺序正确
+            let preservedMessages: ChatMessage[];
+            if (missingHistoryMessages.length > 0) {
+              // 如果有流式 assistant 消息，将丢失的消息插入到它之前
+              if (isStreaming && lastMessage?.role === "assistant") {
+                preservedMessages = [
+                  ...prevMessages.slice(0, -1), // 除最后一条 assistant 消息外的所有消息
+                  ...missingHistoryMessages,    // 丢失的历史消息（包括用户消息）
+                  lastMessage,                  // 流式 assistant 消息
+                ];
+              } else {
+                // 没有流式消息，直接追加
+                preservedMessages = [...prevMessages, ...missingHistoryMessages];
+              }
+            } else {
+              preservedMessages = prevMessages;
+            }
+            
+            // 4. 查找要更新的消息（仅限当前消息或匹配的历史消息）
             let targetMessageIndex = -1;
             
             if (isCurrentMessage && messageWithMetadata.role === "assistant") {
@@ -298,7 +370,7 @@ export function Chat({
               }
             }
             
-            // 4. 更新消息（仅更新目标消息，保留所有历史消息）
+            // 5. 更新消息（仅更新目标消息，保留所有历史消息）
             if (targetMessageIndex >= 0) {
               const targetMessage = preservedMessages[targetMessageIndex];
               
@@ -327,7 +399,7 @@ export function Chat({
               }
             }
             
-            // 5. 如果没有找到匹配的消息，返回保护后的消息列表（历史消息固化）
+            // 6. 如果没有找到匹配的消息，返回保护后的消息列表（历史消息固化）
             return preservedMessages;
           });
         });
