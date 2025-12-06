@@ -2,7 +2,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { useSession } from "next-auth/react";
-import { memo, useState, useEffect } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
@@ -66,12 +66,16 @@ const PurePreviewMessage = ({
 
   useDataStream();
 
-  const isAgent = isAgentMessage(message.role, message.metadata?.communicationType);
-  const isRemoteUser = isRemoteUserMessage(message.role, message.metadata?.communicationType);
-  const isLocalUser = message.role === "user";
-  
   // 获取metadata（缓存，避免重复访问）
   const metadata = message.metadata || {};
+  
+  // 判断是否为Agent消息
+  // 注意：在流式传输过程中，metadata可能为空，此时需要根据selectedModelId判断
+  // 如果selectedModelId存在且不是user::开头，则认为是Agent消息
+  const isAgent = isAgentMessage(message.role, metadata.communicationType) ||
+    (message.role === "assistant" && !metadata.communicationType && selectedModelId && !selectedModelId.startsWith("user::"));
+  const isRemoteUser = isRemoteUserMessage(message.role, metadata.communicationType);
+  const isLocalUser = message.role === "user";
   
   // 判断是否需要从chatModels查找名称（仅在metadata中没有名称时）
   // 新消息：metadata已固化，包含准确的名称
@@ -83,6 +87,7 @@ const PurePreviewMessage = ({
   
   // 获取准确的发送者名称
   // 优先使用metadata（新消息已固化），如果metadata中没有则从chatModels查找（兼容旧消息）
+  // 在流式传输过程中，如果metadata为空，使用selectedModelId作为临时名称
   let senderName: string;
   if (isLocalUser) {
     // 本地用户：优先使用metadata，其次从session获取
@@ -90,6 +95,7 @@ const PurePreviewMessage = ({
   } else {
     // Assistant消息：可能是Agent或远端用户
     // 注意：对于Assistant消息，必须通过communicationType区分Agent和远端用户
+    // 但在流式传输过程中，如果metadata为空，使用selectedModelId判断
     if (isAgent) {
       // Agent消息：优先使用metadata.senderName（已固化），其次使用agentUsed
       senderName = metadata.senderName || metadata.agentUsed;
@@ -109,8 +115,11 @@ const PurePreviewMessage = ({
         senderName = foundAgent?.name || agentUsed;
       }
       
+      // 流式传输过程中，如果 metadata 为空，优先使用 selectedModelId（发送消息时选中的 agent）
+      // 这样可以避免显示"智能体"，而是显示实际的 agent ID（如"司仪"）
+      // 这是接收阶段的临时名称显示，用于在 data-appendMessage 到达之前显示正确的名称
       if (!senderName) {
-        senderName = metadata.agentUsed || selectedModelId || "智能体";
+        senderName = selectedModelId || "智能体";
       }
     } else if (isRemoteUser) {
       // 远端用户消息：优先使用metadata.senderName
@@ -133,7 +142,9 @@ const PurePreviewMessage = ({
         senderName = "用户";
       }
     } else {
-      senderName = metadata.senderName || metadata.agentUsed || "智能体";
+      // 其他情况（可能是metadata为空时的assistant消息）
+      // 在流式传输过程中，如果metadata为空，使用selectedModelId作为临时名称
+      senderName = metadata.senderName || metadata.agentUsed || selectedModelId || "智能体";
     }
   }
   
@@ -158,18 +169,37 @@ const PurePreviewMessage = ({
 
   // 渲染消息内容
   const renderMessageContent = () => {
-    // 检查是否有有效内容
-    const hasValidText = messageParts.some(
-      (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
-    );
-    const hasAttachments = attachmentsFromMessage.length > 0;
-    const hasOtherContent = messageParts.some(
-      (p) => p.type !== "text" && p.type !== "file"
-    );
-    const hasValidContent = hasValidText || hasAttachments || hasOtherContent;
-    
-    if (!hasValidContent) {
-      return null;
+    // 用户消息总是显示，即使内容为空（可能是正在编辑或发送中）
+    if (isLocalUser) {
+      // 检查是否有有效内容
+      const hasValidText = messageParts.some(
+        (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+      );
+      const hasAttachments = attachmentsFromMessage.length > 0;
+      const hasOtherContent = messageParts.some(
+        (p) => p.type !== "text" && p.type !== "file"
+      );
+      const hasValidContent = hasValidText || hasAttachments || hasOtherContent;
+      
+      // 用户消息即使内容为空也显示（可能是正在发送）
+      if (!hasValidContent) {
+        // 返回一个占位符，确保消息可见
+        return <div className="text-gray-400 italic">（空消息）</div>;
+      }
+    } else {
+      // Assistant 消息：检查是否有有效内容
+      const hasValidText = messageParts.some(
+        (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+      );
+      const hasAttachments = attachmentsFromMessage.length > 0;
+      const hasOtherContent = messageParts.some(
+        (p) => p.type !== "text" && p.type !== "file"
+      );
+      const hasValidContent = hasValidText || hasAttachments || hasOtherContent;
+      
+      if (!hasValidContent) {
+        return null;
+      }
     }
     
     return (
@@ -219,17 +249,13 @@ const PurePreviewMessage = ({
 
             // 构建要渲染的文本内容
             // 对于用户消息，显示 @receiverName（接收方是 Agent 或远端用户）
-            // 对于 assistant 消息，也显示 @receiverName（接收方是本地用户，用于标识消息的接收方）
+            // 对于 assistant 消息（Agent 或远端用户），收信方都是右侧本地用户，因此不添加@xxx
             let displayText = sanitizeText(textContent);
-            if (receiverName) {
-              if (isLocalUser) {
-                // 用户消息：显示 @receiverName（接收方是 Agent 或远端用户）
-                displayText = `@${receiverName} ${displayText}`;
-              } else if (isAgent || isRemoteUser) {
-                // Assistant 消息（Agent 或远端用户）：显示 @receiverName（接收方是本地用户）
-                displayText = `@${receiverName} ${displayText}`;
-              }
+            if (receiverName && isLocalUser) {
+              // 用户消息：显示 @receiverName（接收方是 Agent 或远端用户）
+              displayText = `@${receiverName} ${displayText}`;
             }
+            // 左侧消息（Agent 或远端用户）不添加@xxx，因为收信方都是右侧本地用户
 
             return (
               <div key={key}>
@@ -387,7 +413,62 @@ const PurePreviewMessage = ({
   
   // 如果消息内容为空，不渲染整个消息
   const messageContent = renderMessageContent();
+  
+  // 详细日志：追踪所有用户消息的渲染（特别是最后一条）
+  if (process.env.NODE_ENV === "development") {
+    const isLastUserMessage = message.role === "user" && message.id === "4d6c2dcf-60ff-4a63-bc63-3727ebea6879";
+    if (isLocalUser || isLastUserMessage) {
+      console.log("[PreviewMessage] 用户消息渲染检查:", {
+        id: message.id,
+        role: message.role,
+        isLocalUser,
+        hasContent: !!messageContent,
+        messageContentType: messageContent ? typeof messageContent : "null",
+        parts: message.parts,
+        partsCount: messageParts.length,
+        hasValidText: messageParts.some(
+          (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+        ),
+        willRender: !!messageContent || isLocalUser,
+      });
+    }
+  }
+  
   if (!messageContent) {
+    // 详细日志：记录不渲染的消息
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[PreviewMessage] ⚠️ 消息内容为空，不渲染:", {
+        id: message.id,
+        role: message.role,
+        isLocalUser,
+        parts: message.parts,
+        hasValidText: messageParts.some(
+          (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+        ),
+        hasAttachments: attachmentsFromMessage.length > 0,
+      });
+    }
+    // 用户消息即使内容为空也渲染（显示占位符）
+    if (isLocalUser) {
+      // 用户消息应该总是有内容，如果为空可能是渲染逻辑问题
+      console.error("[PreviewMessage] ❌ 用户消息内容为空，但应该总是有内容！", {
+        id: message.id,
+        parts: message.parts,
+      });
+      // 返回一个占位符消息，确保用户消息可见
+      return (
+        <div className="flex items-start gap-3">
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-800">
+              <UserIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+            </div>
+          </div>
+          <div className="flex-1">
+            <div className="text-sm text-gray-400 italic">（消息内容为空）</div>
+          </div>
+        </div>
+      );
+    }
     return null;
   }
 
@@ -412,11 +493,84 @@ const PurePreviewMessage = ({
     </div>
   );
 
+  // 详细日志：追踪消息组件的渲染（特别是最后一条用户消息）
+  if (process.env.NODE_ENV === "development") {
+    const isLastUserMessage = message.role === "user" && message.id === "4d6c2dcf-60ff-4a63-bc63-3727ebea6879";
+    if (isLocalUser || isLastUserMessage) {
+      console.log("[PreviewMessage] 渲染消息组件:", {
+        id: message.id,
+        role: message.role,
+        isLocalUser,
+        hasContent: !!messageContent,
+        messageContentType: messageContent ? typeof messageContent : "null",
+        key: message.id,
+        className: "group/message fade-in w-full animate-in duration-200",
+        willReturnNull: !messageContent && !isLocalUser,
+      });
+    }
+  }
+
+  // 使用 useEffect 追踪消息的 DOM 渲染状态
+  const messageRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    if (process.env.NODE_ENV === "development" && messageRef.current) {
+      const isLastUserMessage = message.role === "user" && message.id === "4d6c2dcf-60ff-4a63-bc63-3727ebea6879";
+      if (isLocalUser || isLastUserMessage) {
+        const element = messageRef.current;
+        const rect = element.getBoundingClientRect();
+        const isVisible = rect.width > 0 && rect.height > 0;
+        const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
+        const computedStyle = window.getComputedStyle(element);
+        
+        console.log("[PreviewMessage] DOM 渲染状态:", {
+          id: message.id,
+          role: message.role,
+          isLocalUser,
+          isVisible,
+          isInViewport,
+          rect: {
+            top: rect.top,
+            bottom: rect.bottom,
+            left: rect.left,
+            right: rect.right,
+            width: rect.width,
+            height: rect.height,
+          },
+          computedStyle: {
+            display: computedStyle.display,
+            visibility: computedStyle.visibility,
+            opacity: computedStyle.opacity,
+            height: computedStyle.height,
+            minHeight: computedStyle.minHeight,
+            maxHeight: computedStyle.maxHeight,
+            overflow: computedStyle.overflow,
+            zIndex: computedStyle.zIndex,
+          },
+          // 检查是否有隐藏样式
+          isHidden: computedStyle.display === "none" || 
+                   computedStyle.visibility === "hidden" || 
+                   parseFloat(computedStyle.opacity) === 0 ||
+                   rect.width === 0 ||
+                   rect.height === 0,
+        });
+      }
+    }
+  }, [message.id, message.role, isLocalUser, messageContent]);
+
   return (
     <div
+      ref={messageRef}
       className="group/message fade-in w-full animate-in duration-200"
       data-role={message.role}
       data-testid={`message-${message.role}`}
+      data-message-id={message.id}
+      style={{
+        // 确保消息可见（调试用）
+        minHeight: "1px",
+        opacity: 1,
+        visibility: "visible" as const,
+      }}
     >
       {mode === "edit" ? (
         // 编辑模式
@@ -464,23 +618,38 @@ const PurePreviewMessage = ({
 export const PreviewMessage = memo(
   PurePreviewMessage,
   (prevProps, nextProps) => {
-    if (prevProps.isLoading !== nextProps.isLoading) {
-      return false;
-    }
+    // 如果消息 ID 不同，需要重新渲染
     if (prevProps.message.id !== nextProps.message.id) {
       return false;
     }
+    
+    // 如果 isLoading 状态变化，需要重新渲染
+    if (prevProps.isLoading !== nextProps.isLoading) {
+      return false;
+    }
+    
+    // 如果 requiresScrollPadding 变化，需要重新渲染
     if (prevProps.requiresScrollPadding !== nextProps.requiresScrollPadding) {
       return false;
     }
+    
+    // 如果消息内容（parts）变化，需要重新渲染
     if (!equal(prevProps.message.parts, nextProps.message.parts)) {
       return false;
     }
+    
+    // 如果 vote 变化，需要重新渲染
     if (!equal(prevProps.vote, nextProps.vote)) {
       return false;
     }
-
-    return false;
+    
+    // 如果 selectedModelId 变化，可能影响发送者名称显示，需要重新渲染
+    if (prevProps.selectedModelId !== nextProps.selectedModelId) {
+      return false;
+    }
+    
+    // 其他情况：消息 ID、内容、状态都相同，可以复用组件（返回 true 表示相等，不需要重新渲染）
+    return true;
   }
 );
 

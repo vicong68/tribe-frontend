@@ -29,31 +29,6 @@ export function createBackendLanguageModel(
     doStream: async (options) => {
       const { prompt, messages, maxTokens, temperature } = options;
 
-      // 调试日志：检查传入的参数
-      console.log("[backend-model] doStream options:", {
-        hasPrompt: !!prompt,
-        promptType: typeof prompt,
-        promptValue: typeof prompt === "string" ? prompt.substring(0, 50) : prompt,
-        hasMessages: !!messages,
-        messagesType: Array.isArray(messages) ? "array" : typeof messages,
-        messagesLength: Array.isArray(messages) ? messages.length : "N/A",
-        messages: Array.isArray(messages) ? messages.map((m: any) => ({
-          role: m.role,
-          hasContent: !!m.content,
-          contentType: typeof m.content,
-          contentPreview: typeof m.content === "string" ? m.content.substring(0, 50) : "N/A",
-        })) : "N/A",
-        // 检查 userId 和 conversationId（可能在 providerOptions.backend 中）
-        hasUserId: "userId" in options,
-        userId: (options as any).userId,
-        hasConversationId: "conversationId" in options,
-        conversationId: (options as any).conversationId,
-        hasProviderOptions: "providerOptions" in options,
-        providerOptions: (options as any).providerOptions,
-        backendOptions: (options as any).providerOptions?.backend,
-        allOptionsKeys: Object.keys(options),
-      });
-
       // 处理 messages：优先使用 prompt（如果存在且非空），否则使用 messages
       let processedMessages: Array<{ role: string; content: string }> = [];
       
@@ -91,17 +66,6 @@ export function createBackendLanguageModel(
               content: content,
             };
           });
-          
-          // 调试日志
-          console.log("[backend-model] doStream prompt is message array:", {
-            messagesCount: processedMessages.length,
-            roles: processedMessages.map((m) => m.role),
-            contentsPreview: processedMessages.map((m) => ({
-              role: m.role,
-              contentLength: m.content.length,
-              contentPreview: m.content.substring(0, 50),
-            })),
-          });
         } else {
           // prompt 是字符串或字符串数组，构建用户消息
           const promptContent =
@@ -118,22 +82,7 @@ export function createBackendLanguageModel(
                     .join("")
                 : String(prompt || "");
           
-          // 调试日志：检查 promptContent
-          console.log("[backend-model] doStream prompt processing:", {
-            promptType: typeof prompt,
-            promptContent,
-            promptContentLength: promptContent?.length || 0,
-            promptContentTrimmedLength: promptContent?.trim().length || 0,
-          });
-          
-          // 验证 prompt 内容不为空
           if (!promptContent || promptContent.trim().length === 0) {
-            console.error("[backend-model] doStream prompt is empty:", {
-              prompt,
-              promptType: typeof prompt,
-              promptContent,
-              messages,
-            });
             throw new Error("Prompt content cannot be empty");
           }
           
@@ -220,21 +169,6 @@ export function createBackendLanguageModel(
       const userId = backendOptions.userId || (options as any).userId || "temp_user";
       const conversationId = backendOptions.conversationId || (options as any).conversationId || generateSessionId(userId, agentName);
       
-      // 调试日志
-      console.log("[backend-model] doStream called:", {
-        agentName,
-        userId,
-        conversationId,
-        hasMessages: !!messages,
-        hasPrompt: !!prompt,
-        messagesCount: processedMessages.length,
-        processedMessagesPreview: processedMessages.map((m) => ({
-          role: m.role,
-          contentLength: m.content.length,
-          contentPreview: m.content.substring(0, 50),
-        })),
-      });
-      
       // 确保 messages 是数组格式（符合后端 API 要求）
       if (!Array.isArray(processedMessages)) {
         throw new Error("Processed messages must be an array");
@@ -252,8 +186,6 @@ export function createBackendLanguageModel(
         max_tokens: maxTokens,
         stream: true,
       };
-      
-      console.log("[backend-model] Request body:", JSON.stringify(requestBody, null, 2));
 
       // 调用后端 API
       const response = await fetch(`${BACKEND_API_URL}/api/chat/stream`, {

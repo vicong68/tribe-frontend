@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -84,7 +84,7 @@ export function Chat({
   const {
     messages,
     setMessages,
-    sendMessage,
+    sendMessage: originalSendMessage,
     status,
     stop,
     regenerate,
@@ -130,6 +130,16 @@ export function Chat({
       },
     }),
     onData: (dataPart: any) => {
+      // 详细日志：追踪 onData 事件
+      if (process.env.NODE_ENV === "development") {
+        console.log("[onData] 收到数据事件:", dataPart.type, dataPart);
+        if (dataPart.type === "text-start") {
+          console.log("[onData] ⚠️ text-start 事件到达，此时 messages 数量:", messages.length);
+          console.log("[onData] 当前 messages:", messages.map(m => ({ id: m.id, role: m.role })));
+          console.log("[onData] 固化的历史消息:", frozenHistoryMessagesRef.current.map(m => ({ id: m.id, role: m.role })));
+        }
+      }
+      
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
       if (dataPart.type === "data-usage") {
         setUsage(dataPart.data);
@@ -172,7 +182,64 @@ export function Chat({
     messagesRef.current = messages;
   }, [messages]);
 
+  // 固化历史消息：当 messages 更新时，保存所有历史消息（除当前流式消息外）
+  // 这可以防止 useChat 在处理流式响应时意外移除历史消息
+  const frozenHistoryMessagesRef = useRef<ChatMessage[]>([]);
+  const lastStreamingStatusRef = useRef<string>("idle");
+  const lastMessagesLengthRef = useRef<number>(0);
+  
+  // 监听 messages 变化，在每次变化时都尝试固化（更早的时机）
+  useEffect(() => {
+    const isStreaming = status === "streaming";
+    const wasStreaming = lastStreamingStatusRef.current === "streaming";
+    const messagesLength = messages.length;
+    const lastLength = lastMessagesLengthRef.current;
+    
+    // 详细日志
+    if (process.env.NODE_ENV === "development") {
+      console.log("[消息固化] ===== 消息状态变化 =====");
+      console.log("[消息固化] status:", lastStreamingStatusRef.current, "->", status);
+      console.log("[消息固化] messages 数量:", lastLength, "->", messagesLength);
+      console.log("[消息固化] 当前消息列表:", messages.map(m => ({ id: m.id, role: m.role, hasMetadata: !!m.metadata })));
+      console.log("[消息固化] 固化的历史消息数量:", frozenHistoryMessagesRef.current.length);
+      console.log("[消息固化] 固化的历史消息:", frozenHistoryMessagesRef.current.map(m => ({ id: m.id, role: m.role })));
+    }
+    
+    // 关键：在消息数量增加时（用户发送消息后），立即固化
+    // 这确保在 useChat 处理 text-start 之前，用户消息已经被固化
+    if (messagesLength > lastLength && !isStreaming) {
+      // 消息数量增加且不在流式传输中，立即固化（用户刚发送消息）
+      frozenHistoryMessagesRef.current = [...messages];
+      if (process.env.NODE_ENV === "development") {
+        console.log("[消息固化] ✅ 用户消息发送后立即固化，消息数量:", messagesLength);
+      }
+    } else if (!wasStreaming && isStreaming) {
+      // 从非 streaming 状态进入 streaming 状态时，固化当前所有消息为历史消息
+      frozenHistoryMessagesRef.current = [...messages];
+      if (process.env.NODE_ENV === "development") {
+        console.log("[消息固化] ✅ 进入流式传输状态，固化消息，消息数量:", messagesLength);
+      }
+    } else if (wasStreaming && !isStreaming && messagesLength > 0) {
+      // 流式传输结束，更新固化的历史消息（包含新完成的消息）
+      frozenHistoryMessagesRef.current = [...messages];
+      if (process.env.NODE_ENV === "development") {
+        console.log("[消息固化] ✅ 流式传输结束，更新固化消息，消息数量:", messagesLength);
+      }
+    } else if (messagesLength < lastLength && isStreaming) {
+      // ⚠️ 警告：在流式传输中，消息数量减少（可能有问题）
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[消息固化] ⚠️ 警告：流式传输中消息数量减少！", lastLength, "->", messagesLength);
+        console.warn("[消息固化] 当前消息:", messages.map(m => ({ id: m.id, role: m.role })));
+        console.warn("[消息固化] 固化的历史消息:", frozenHistoryMessagesRef.current.map(m => ({ id: m.id, role: m.role })));
+      }
+    }
+    
+    lastStreamingStatusRef.current = status;
+    lastMessagesLengthRef.current = messagesLength;
+  }, [messages, status]);
+
   // 处理 data-appendMessage 事件：在 useChat 处理完消息后更新 metadata
+  // 标准逻辑：历史消息固化，仅更新当前消息
   const { dataStream } = useDataStream();
   const processedMetadataRef = useRef<Set<string>>(new Set());
   
@@ -180,6 +247,15 @@ export function Chat({
     if (!dataStream || dataStream.length === 0) return;
 
     const appendMessageEvents = dataStream.filter((part) => part.type === "data-appendMessage");
+    
+    // 详细日志：追踪 dataStream 变化
+    if (process.env.NODE_ENV === "development" && appendMessageEvents.length > 0) {
+      console.log("[data-appendMessage] ===== 检测到 data-appendMessage 事件 =====");
+      console.log("[data-appendMessage] 事件数量:", appendMessageEvents.length);
+      console.log("[data-appendMessage] 当前 messages 数量:", messages.length);
+      console.log("[data-appendMessage] 当前 messages:", messages.map(m => ({ id: m.id, role: m.role })));
+    }
+    
     if (appendMessageEvents.length === 0) return;
 
     appendMessageEvents.forEach((dataPart) => {
@@ -193,47 +269,94 @@ export function Chat({
         
         requestAnimationFrame(() => {
           setMessages((prevMessages) => {
-            const prevUserMessages = prevMessages.filter((m) => m.role === "user");
+            // ===== 标准消息渲染逻辑模板 =====
+            // 1. 界定当前消息和历史消息
+            //    当前消息：正在流式传输的消息（最后一条 assistant 消息，且 status === "streaming"）
+            //    历史消息：除当前消息外的所有消息（固化，不应被修改）
             
-            let existingMessageIndex = -1;
+            const isStreaming = status === "streaming";
+            const lastMessage = prevMessages[prevMessages.length - 1];
+            const isCurrentMessage = isStreaming && 
+              lastMessage?.role === "assistant" && 
+              (lastMessage.id === messageWithMetadata.id || 
+               lastMessage.metadata?.originalMessageId === messageWithMetadata.id);
             
-            if (messageWithMetadata.role === "assistant") {
-              for (let i = prevMessages.length - 1; i >= 0; i--) {
-                if (prevMessages[i].role === "assistant") {
-                  if (prevMessages[i].id === messageWithMetadata.id) {
-                    existingMessageIndex = i;
-                    break;
-                  }
-                  if (prevMessages[i].metadata?.originalMessageId === messageWithMetadata.id) {
-                    existingMessageIndex = i;
-                    break;
-                  }
-                  break;
-                }
+            // 详细日志
+            if (process.env.NODE_ENV === "development") {
+              console.log("[data-appendMessage] ===== 处理 metadata 更新 =====");
+              console.log("[data-appendMessage] messageWithMetadata:", { id: messageWithMetadata.id, role: messageWithMetadata.role });
+              console.log("[data-appendMessage] prevMessages 数量:", prevMessages.length);
+              console.log("[data-appendMessage] prevMessages:", prevMessages.map(m => ({ id: m.id, role: m.role })));
+            }
+            
+            // 2. 保护历史消息：合并固化的历史消息和当前消息列表
+            //    确保即使用户消息在 prevMessages 中被移除，也能恢复
+            const frozenHistory = frozenHistoryMessagesRef.current;
+            const currentMessageIds = new Set(prevMessages.map(m => m.id));
+            const frozenMessageIds = new Set(frozenHistory.map(m => m.id));
+            
+            // 找出被移除的历史消息（在固化列表中但不在当前列表中）
+            const missingHistoryMessages = frozenHistory.filter(
+              msg => !currentMessageIds.has(msg.id) && 
+              // 排除当前流式消息（如果存在）
+              !(isStreaming && lastMessage && msg.id === lastMessage.id)
+            );
+            
+            // 详细日志：检查是否有消息丢失
+            if (process.env.NODE_ENV === "development") {
+              if (missingHistoryMessages.length > 0) {
+                console.warn("[data-appendMessage] ⚠️ 发现被移除的历史消息！", missingHistoryMessages.map(m => ({ id: m.id, role: m.role })));
+                console.warn("[data-appendMessage] 当前消息ID:", Array.from(currentMessageIds));
+                console.warn("[data-appendMessage] 固化消息ID:", Array.from(frozenMessageIds));
+              } else {
+                console.log("[data-appendMessage] ✅ 没有发现被移除的消息");
               }
-            } else if (messageWithMetadata.role === "user") {
-              for (let i = prevMessages.length - 1; i >= 0; i--) {
-                if (prevMessages[i].role === "user") {
-                  if (prevMessages[i].id === messageWithMetadata.id) {
-                    existingMessageIndex = i;
-                    break;
-                  }
+            }
+            
+            // 合并：当前消息列表 + 被移除的历史消息
+            const preservedMessages = missingHistoryMessages.length > 0
+              ? [...prevMessages, ...missingHistoryMessages]
+              : prevMessages;
+            
+            // 详细日志：恢复后的消息
+            if (process.env.NODE_ENV === "development" && missingHistoryMessages.length > 0) {
+              console.log("[data-appendMessage] ✅ 恢复后的消息数量:", preservedMessages.length);
+              console.log("[data-appendMessage] 恢复后的消息:", preservedMessages.map(m => ({ id: m.id, role: m.role })));
+            }
+            
+            // 3. 查找要更新的消息（仅限当前消息或匹配的历史消息）
+            let targetMessageIndex = -1;
+            
+            if (isCurrentMessage && messageWithMetadata.role === "assistant") {
+              // 当前消息：最后一条 assistant 消息
+              targetMessageIndex = preservedMessages.length - 1;
+            } else {
+              // 历史消息：通过 ID 查找（用于处理延迟到达的 metadata）
+              for (let i = preservedMessages.length - 1; i >= 0; i--) {
+                if (preservedMessages[i].id === messageWithMetadata.id ||
+                    preservedMessages[i].metadata?.originalMessageId === messageWithMetadata.id) {
+                  // 只更新匹配的消息，不更新其他历史消息
+                  targetMessageIndex = i;
                   break;
                 }
               }
             }
             
-            if (existingMessageIndex >= 0) {
-              const updatedMessages = [...prevMessages];
-              const existingMessage = updatedMessages[existingMessageIndex];
+            // 4. 更新消息（仅更新目标消息，保留所有历史消息）
+            if (targetMessageIndex >= 0) {
+              const targetMessage = preservedMessages[targetMessageIndex];
               
-              const needsUpdate = !existingMessage.metadata || 
-                JSON.stringify(existingMessage.metadata) !== JSON.stringify(messageWithMetadata.metadata);
+              // 检查是否需要更新 metadata
+              const needsUpdate = !targetMessage.metadata || 
+                JSON.stringify(targetMessage.metadata) !== JSON.stringify(messageWithMetadata.metadata);
               
               if (needsUpdate) {
-                const existingMetadata = existingMessage.metadata || { createdAt: new Date().toISOString() };
-                updatedMessages[existingMessageIndex] = {
-                  ...existingMessage,
+                const updatedMessages = [...preservedMessages];
+                const existingMetadata = targetMessage.metadata || { createdAt: new Date().toISOString() };
+                
+                // 仅更新目标消息的 metadata，保留其他所有消息不变（历史消息固化）
+                updatedMessages[targetMessageIndex] = {
+                  ...targetMessage,
                   metadata: {
                     ...existingMetadata,
                     ...messageWithMetadata.metadata,
@@ -242,29 +365,44 @@ export function Chat({
                 };
                 
                 processedMetadataRef.current.add(eventKey);
-                
-                const updatedUserMessages = updatedMessages.filter((m) => m.role === "user");
-                if (prevUserMessages.length > updatedUserMessages.length) {
-                  const missingUserMessages = prevUserMessages.filter(
-                    (m) => !updatedUserMessages.some((um) => um.id === m.id)
-                  );
-                  return [...updatedMessages, ...missingUserMessages];
-                }
-                
                 return updatedMessages;
               } else {
                 processedMetadataRef.current.add(eventKey);
               }
             }
             
-            return prevMessages;
+            // 5. 如果没有找到匹配的消息，返回保护后的消息列表（历史消息固化）
+            return preservedMessages;
           });
         });
       } catch (error) {
         // 静默处理错误
       }
     });
-  }, [dataStream, messages, setMessages]);
+  }, [dataStream, status, setMessages]);
+
+  // 包装 sendMessage，在发送前立即固化消息
+  const sendMessage = useCallback((message: any) => {
+    // 在发送消息前，立即固化当前所有消息
+    // 这确保在 useChat 处理 text-start 之前，用户消息已经被固化
+    if (process.env.NODE_ENV === "development") {
+      console.log("[sendMessage] ===== 发送消息前固化 =====");
+      console.log("[sendMessage] 当前 messages 数量:", messages.length);
+      console.log("[sendMessage] 当前 messages:", messages.map(m => ({ id: m.id, role: m.role })));
+    }
+    
+    // 立即固化当前所有消息（包括即将发送的用户消息）
+    // 注意：useChat 会在 sendMessage 调用后立即添加用户消息到 messages
+    // 但我们在发送前固化，然后在 useEffect 中会再次固化（包含新消息）
+    frozenHistoryMessagesRef.current = [...messages];
+    
+    if (process.env.NODE_ENV === "development") {
+      console.log("[sendMessage] ✅ 消息已固化，数量:", frozenHistoryMessagesRef.current.length);
+    }
+    
+    // 调用原始的 sendMessage
+    return originalSendMessage(message);
+  }, [messages, originalSendMessage]);
 
   useEffect(() => {
     const isSwitching = conversationManager.detectAgentSwitch(currentModelId);
