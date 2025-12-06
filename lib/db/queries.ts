@@ -366,7 +366,12 @@ export async function getChatById({ id }: { id: string }) {
 
 export async function saveMessages({ messages }: { messages: DBMessage[] }) {
   try {
-    return await db.insert(message).values(messages);
+    // 使用 ON CONFLICT DO NOTHING 处理重复键冲突（幂等性）
+    // 这可以防止并发请求或重试导致的重复保存错误
+    return await db
+      .insert(message)
+      .values(messages)
+      .onConflictDoNothing({ target: message.id });
   } catch (error) {
     // 输出详细错误信息以便调试
     console.error("[saveMessages] Database error details:", {

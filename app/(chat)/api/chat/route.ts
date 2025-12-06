@@ -32,21 +32,14 @@ async function getAgentOrUserName(
   targetId: string,
   isUser: boolean
 ): Promise<string | null> {
-  // Agent 的常见显示名称列表（避免不必要的查询）
-  const commonAgentNames = ["司仪", "书吏"];
-  
-  if (!isUser && commonAgentNames.includes(targetId)) {
-    // Agent ID 已经是显示名称，直接返回
-    return targetId;
-  }
-  
   try {
     // 添加超时控制（5秒），避免阻塞消息创建流程
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     
     try {
-      const response = await fetch(`${BACKEND_API_URL}/api/agents?format=simple`, {
+      // 使用统一实体信息API（更高效）
+      const response = await fetch(`${BACKEND_API_URL}/api/entity/summary?entity_type=${isUser ? "user" : "agent"}`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
@@ -55,23 +48,29 @@ async function getAgentOrUserName(
       
       if (response.ok) {
         const data = await response.json();
-        const items = data.agents || [];
         
         if (isUser) {
-          // 用户：从后端用户列表获取
-          const user = items.find(
-            (item: any) => item.type === "user" && item.id === `user::${targetId}`
+          // 用户：从后端用户列表获取（targetId 是 member_id）
+          // 注意：必须大小写敏感匹配，不能使用toLowerCase/toUpperCase
+          const users = data.users || [];
+          const user = users.find(
+            (item: any) => {
+              // 精确匹配：user::member_id 或 member_id（大小写敏感）
+              const itemId = item.id || "";
+              const itemMemberId = itemId.replace(/^user::/, "");
+              return itemId === `user::${targetId}` || 
+                     itemId === targetId || 
+                     itemMemberId === targetId;
+            }
           );
-          return user?.nickname || null;
+          return user?.display_name || user?.nickname || null;
         } else {
-          // Agent：从后端 agent 列表获取
-          // Agent ID 可能是显示名称（如"司仪"）或内部ID（如"chat"）
-          const agent = items.find(
-            (item: any) =>
-              item.type === "agent" &&
-              (item.id === targetId || item.nickname === targetId)
+          // Agent：从后端 agent 列表获取（targetId 是 agent_id）
+          const agents = data.agents || [];
+          const agent = agents.find(
+            (item: any) => item.id === targetId
           );
-          return agent?.nickname || targetId; // 如果找不到，使用 targetId 本身（可能是显示名称）
+          return agent?.display_name || targetId; // 如果找不到，使用 targetId 本身
         }
       }
     } catch (fetchError) {
@@ -156,9 +155,11 @@ export async function POST(request: Request) {
         try {
           // 生成临时 conversationId 用于标题生成
           // 注意：标题生成使用后端 member_id 确保一致性
+          // 使用标准格式：title_{user_id}_{timestamp}（临时会话，不参与对话记忆）
           const backendMemberId = session.user.type === "guest" 
             ? "guest_user"
             : (session.user.memberId || session.user.email?.split("@")[0] || session.user.id);
+          // 标准格式：title_{user_id}_{timestamp}（临时会话ID，用于标题生成）
           const titleConversationId = `title_${backendMemberId}_${Date.now()}`;
           
           title = await generateTitleFromUserMessage({
@@ -201,16 +202,54 @@ export async function POST(request: Request) {
     }
     
     // 判断是用户-用户对话还是用户-Agent对话（用于构建metadata）
+    // 注意：访客用户只能与 Agent 对话，不能与用户对话
     const isUserToUser = selectedChatModel.startsWith("user::");
+    
+    // 访客用户不能发送用户-用户消息
+    if (isUserToUser && session.user.type === "guest") {
+      console.error("[chat/route] Guest user attempted to send user-user message:", selectedChatModel);
+      return new ChatSDKError(
+        "forbidden:chat",
+        "访客用户不能发送用户-用户消息"
+      ).toResponse();
+    }
+    
     const targetId = isUserToUser 
       ? selectedChatModel.replace(/^user::/, "") 
       : selectedChatModel;
     
     // 在消息创建时获取收发方名称（仅查询一次，固化到metadata）
-    // 用户消息的发送方名称：从 session 获取
-    const senderName = session.user.email?.split("@")[0] || "我";
+    // 用户消息的发送方名称：优先使用后端返回的昵称，否则使用memberId，最后使用email前缀
+    // 注意：必须大小写敏感，不能从email提取（email可能大小写不一致）
+    // 访客用户显示中文"访客"，登录用户显示memberId或email前缀
+    let senderName = "我";
+    if (session.user.type === "guest") {
+      // 访客用户显示中文"访客"
+      senderName = "访客";
+    } else if (session.user.memberId) {
+      // 优先使用memberId（后端标准ID）
+      senderName = session.user.memberId;
+    } else if (session.user.email) {
+      // 如果memberId不存在，才从email提取（保持向后兼容）
+      senderName = session.user.email.split("@")[0];
+    }
     // 接收方名称：从后端获取（Agent 或用户）
+    // 注意：必须确保 targetId 是正确的 agent_id 或 member_id
+    // 如果 isUserToUser 为 false，targetId 应该是 agent_id（如 "chat", "rag"）
+    // 如果 isUserToUser 为 true，targetId 应该是 member_id（不包含 "user::" 前缀）
     const receiverName = await getAgentOrUserName(targetId, isUserToUser);
+    
+    // 调试日志（仅在开发环境）
+    if (process.env.NODE_ENV === "development") {
+      console.log("[chat/route] Message metadata:", {
+        selectedChatModel,
+        targetId,
+        isUserToUser,
+        receiverName,
+        backendMemberId,
+        senderName,
+      });
+    }
     
     // 构建用户消息的metadata（固化名称和头像）
     const userMessageMetadata: Record<string, any> = {
@@ -226,6 +265,8 @@ export async function POST(request: Request) {
     } else {
       userMessageMetadata.receiverId = targetId; // Agent ID
       userMessageMetadata.agentUsed = targetId; // Agent ID（用于显示）
+      // 如果 receiverName 为空或等于 targetId，说明查找失败，使用 targetId 作为后备
+      // 但这种情况不应该发生，因为 getAgentOrUserName 会返回 targetId 作为后备
       userMessageMetadata.receiverName = receiverName || targetId; // 固化 Agent 名称
     }
     
@@ -329,8 +370,8 @@ export async function POST(request: Request) {
       backendRequestBody.target_id = targetId;
       backendRequestBody.target_type = "user";
     } else {
-      // 用户-Agent对话：使用 agent_id（向后兼容）
-      backendRequestBody.agent_id = targetId; // Agent ID（规范标识，如：司仪、书吏等）
+      // 用户-Agent对话：使用 agent_id（标准化：统一使用 agent_id，如 "chat", "rag"）
+      backendRequestBody.agent_id = targetId; // Agent ID（标准化标识，如 "chat", "rag", "Info_Hunter"）
       backendRequestBody.target_type = "agent";
     }
 

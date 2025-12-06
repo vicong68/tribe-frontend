@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { useCallback, useEffect, useRef, useState, startTransition } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
@@ -12,11 +13,13 @@ import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import { useConversationManager } from "@/hooks/use-conversation-manager";
 import { useMessagePersistence } from "@/hooks/use-message-persistence";
+import { useOfflineMessages } from "@/hooks/use-offline-messages";
 import { useStreamChatWithRetry } from "@/hooks/use-stream-chat-with-retry";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
+import { getBackendMemberId } from "@/lib/user-utils";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import { Artifact } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
@@ -159,7 +162,15 @@ export function Chat({
         setUsage(dataPart.data);
       }
       
+      // 用户-用户消息不需要流式状态（消息已通过SSE实时推送）
+      // 检查最后一条消息是否是用户-用户消息
+      const lastMessage = messagesRef.current[messagesRef.current.length - 1];
+      const isUserToUser = lastMessage?.metadata?.communicationType === "user_user";
+      
+      // 只有非用户-用户消息才设置为 streaming 状态
+      if (!isUserToUser) {
       conversationManager.updateStatus("streaming");
+      }
     },
     onFinish: () => {
       // 流式响应完成
@@ -216,7 +227,76 @@ export function Chat({
   });
 
   // 获取 SSE 消息上下文（用于接收用户-用户消息）
-  const { onMessage: onSSEMessage } = useSSEMessageContext();
+  const { onMessage: onSSEMessage, isConnected: sseConnected } = useSSEMessageContext();
+  
+  // 获取用户 ID 和登录状态（用于拉取离线消息）
+  const { data: session } = useSession();
+  const isLoggedIn = session?.user?.type === "regular"; // 只有登录用户才拉取离线消息
+  const userId = isLoggedIn && session?.user
+    ? getBackendMemberId(session.user)
+    : null;
+  
+  // 拉取离线消息（仅在用户登录成功且 SSE 连接建立后）
+  // 拉取完成后触发用户列表和状态更新
+  useOfflineMessages({
+    userId,
+    isLoggedIn,
+    isConnected: sseConnected,
+    onMessages: useCallback((offlineMessages: ChatMessage[]) => {
+      if (offlineMessages.length === 0) {
+        return;
+      }
+      
+      // 将离线消息添加到消息列表
+      setMessages((prevMessages) => {
+        const existingIds = new Set(prevMessages.map(m => m.id));
+        const newMessages = offlineMessages.filter(msg => !existingIds.has(msg.id));
+        
+        if (newMessages.length === 0) {
+          return prevMessages;
+        }
+        
+        // 检查是否已存在相同内容的消息（避免重复）
+        const uniqueNewMessages = newMessages.filter((newMsg) => {
+          const newTextPart = newMsg.parts?.find((p: any) => p.type === "text") as any;
+          const newText = newTextPart?.text || "";
+          return !prevMessages.some((existing) => {
+            const existingTextPart = existing.parts?.find((p: any) => p.type === "text") as any;
+            const existingText = existingTextPart?.text || "";
+            return (
+              existing.metadata?.senderId === newMsg.metadata?.senderId &&
+              existing.metadata?.receiverId === newMsg.metadata?.receiverId &&
+              existing.role === "assistant" &&
+              existing.metadata?.communicationType === "user_user" &&
+              existingText === newText
+            );
+          });
+        });
+        
+        if (uniqueNewMessages.length === 0) {
+          return prevMessages;
+        }
+        
+        // 保存到数据库
+        saveAssistantMessages(uniqueNewMessages).catch((error) => {
+          console.error("[Chat] Failed to save offline messages to database:", error);
+        });
+        
+        return [...prevMessages, ...uniqueNewMessages];
+      });
+    }, [setMessages, saveAssistantMessages]),
+    onOfflineMessagesFetched: useCallback(() => {
+      // 离线消息拉取完成后，触发用户列表和状态拉取
+      // 通过清除缓存并触发刷新来实现
+      import("@/lib/ai/models-client")
+        .then(({ clearModelsCache }) => {
+          clearModelsCache(true);
+        })
+        .catch(() => {
+          // 静默处理导入错误
+        });
+    }, []),
+  });
 
   // 更新 messagesRef 以跟踪最新的消息列表
   useEffect(() => {
@@ -463,15 +543,35 @@ export function Chat({
             if (targetMessageIndex >= 0) {
               const targetMessage = preservedMessages[targetMessageIndex];
               
-              // 检查是否需要更新 metadata
-              const needsUpdate = !targetMessage.metadata || 
+              // 检查是否需要更新（metadata 或内容）
+              const existingTextPart = targetMessage.parts?.find((p: any) => p.type === "text") as any;
+              const newTextPart = messageWithMetadata.parts?.find((p: any) => p.type === "text") as any;
+              const existingText = existingTextPart?.text || "";
+              const newText = newTextPart?.text || "";
+              const metadataChanged = !targetMessage.metadata || 
                 JSON.stringify(targetMessage.metadata) !== JSON.stringify(messageWithMetadata.metadata);
+              const contentChanged = newText.length > existingText.length;
               
-              if (needsUpdate) {
+              // 如果 metadata 或内容有变化，则更新
+              if (metadataChanged || contentChanged) {
                 const updatedMessages = [...preservedMessages];
                 const existingMetadata = targetMessage.metadata || { createdAt: new Date().toISOString() };
                 
-                // 仅更新目标消息的 metadata，保留其他所有消息不变（历史消息固化）
+                // 如果新消息内容更完整，则替换整个消息（包括 parts）
+                // 否则只更新 metadata
+                if (contentChanged) {
+                  // 内容更完整，替换整个消息
+                  updatedMessages[targetMessageIndex] = {
+                    ...messageWithMetadata,
+                    // 保留原有的 createdAt（如果存在），确保时间戳正确
+                    metadata: {
+                      ...existingMetadata,
+                      ...messageWithMetadata.metadata,
+                      createdAt: existingMetadata.createdAt || messageWithMetadata.metadata?.createdAt || new Date().toISOString(),
+                    },
+                  };
+                } else {
+                  // 只更新 metadata
                 updatedMessages[targetMessageIndex] = {
                   ...targetMessage,
                   metadata: {
@@ -480,15 +580,27 @@ export function Chat({
                     createdAt: existingMetadata.createdAt || messageWithMetadata.metadata?.createdAt || new Date().toISOString(),
                   },
                 };
+                }
                 
                 processedMetadataRef.current.add(eventKey);
                 return updatedMessages;
               } else {
                 processedMetadataRef.current.add(eventKey);
               }
+            } else {
+              // 6. 如果没有找到匹配的消息，且不在流式传输中，添加新消息
+              // 注意：在流式传输中，新消息应该由 useChat 处理，这里不添加
+              // 但在页面刷新恢复场景中，可能需要添加
+              if (!isStreaming && messageWithMetadata.role === "assistant") {
+                // 检查是否是页面刷新恢复场景：消息不在列表中，但应该存在
+                // 这种情况下，添加消息到列表末尾
+                const updatedMessages = [...preservedMessages, messageWithMetadata];
+                processedMetadataRef.current.add(eventKey);
+                return updatedMessages;
+              }
             }
             
-            // 6. 如果没有找到匹配的消息，返回保护后的消息列表（历史消息固化）
+            // 7. 如果没有找到匹配的消息且不需要添加，返回保护后的消息列表（历史消息固化）
             return preservedMessages;
           });
         });

@@ -17,6 +17,7 @@ export const user = pgTable("User", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   email: varchar("email", { length: 64 }).notNull(),
   password: varchar("password", { length: 64 }),
+  memberId: varchar("member_id", { length: 50 }), // 关联到后端 members.member_id
 });
 
 export type User = InferSelectModel<typeof user>;

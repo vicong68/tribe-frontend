@@ -20,6 +20,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { guestRegex } from "@/lib/constants";
+import { getBackendMemberId, updateBackendOnlineStatus } from "@/lib/user-utils";
 import { LoaderIcon } from "./icons";
 import { toast } from "./toast";
 
@@ -104,6 +105,15 @@ export function SidebarUserNav({ user }: { user: User }) {
                   if (isGuest) {
                     router.push("/login");
                   } else {
+                    // 注销时先更新后端在线状态，然后调用 NextAuth signOut
+                    const memberId = data?.user ? getBackendMemberId(data.user) : null;
+                    if (memberId) {
+                      // 异步更新后端状态，不阻塞注销流程
+                      updateBackendOnlineStatus(memberId, false).catch(() => {
+                        // 错误已在函数内部处理
+                      });
+                    }
+                    
                     signOut({
                       redirectTo: "/",
                     });

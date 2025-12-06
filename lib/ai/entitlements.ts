@@ -12,7 +12,7 @@ export const entitlementsByUserType: Record<UserType, Entitlements> = {
    */
   guest: {
     maxMessagesPerDay: 20,
-    availableChatModelIds: ["司仪"], // 访客仅能与"司仪"对话
+    availableChatModelIds: ["chat"], // 标准化：使用 agent_id（对应"司仪"）
   },
 
   /*
@@ -20,7 +20,7 @@ export const entitlementsByUserType: Record<UserType, Entitlements> = {
    */
   regular: {
     maxMessagesPerDay: 100,
-    availableChatModelIds: ["司仪", "书吏"], // 登录用户可以使用所有智能体
+    availableChatModelIds: ["chat", "rag"], // 标准化：使用 agent_id（对应"司仪"和"书吏"）
   },
 
   /*

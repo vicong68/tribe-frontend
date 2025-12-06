@@ -40,6 +40,8 @@ export async function generateTitleFromUserMessage({
 
     // 注意：AI SDK 的 generateText 不支持直接传递 userId 和 conversationId
     // 需要通过 providerOptions 传递这些参数
+    // 标准格式：如果未提供 conversationId，使用 title_{user_id}_{timestamp} 格式
+    const defaultConversationId = conversationId || `title_${userId || "temp_user"}_${Date.now()}`;
     const { text: title } = await generateText({
       model: myProvider.languageModel("title-model"),
       system: titlePrompt,
@@ -47,7 +49,7 @@ export async function generateTitleFromUserMessage({
       providerOptions: {
         backend: {
           userId: userId || "temp_user",
-          conversationId: conversationId || `title_${Date.now()}`,
+          conversationId: defaultConversationId,
         },
       },
     });

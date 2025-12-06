@@ -10,6 +10,7 @@ import type { ChatModel } from "./models";
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
 // 静态 agents 映射（后端静态创建的 agents）
+// 注意：现在使用 agent_id（如 "chat", "rag"），而不是显示名称
 const STATIC_AGENTS = ["chat", "rag"]; // 对应司仪和书吏
 
 /**
@@ -34,37 +35,35 @@ export async function fetchChatModels(includeUsers: boolean = false): Promise<Ch
     const data = await response.json();
     const items = data.agents || [];
 
-    // 转换为 ChatModel 格式
+    // 转换为 ChatModel 格式（标准化：统一使用 agent_id）
+    // 注意：现在包含所有agents（静态、动态），不再过滤
     const models: ChatModel[] = items
       .filter((item: any) => {
         // 如果不需要用户，过滤掉用户类型
         if (!includeUsers && item.type === "user") {
           return false;
         }
-        // 如果需要用户，包含所有类型
-        // 对于agents，只包含静态agents（向后兼容）
-        if (item.type === "agent") {
-          return STATIC_AGENTS.includes(item.id);
-        }
+        // 对于agents，包含所有类型（静态、动态），不再过滤
         return true;
       })
       .map((item: any) => {
         if (item.type === "user") {
-          // 用户类型
+          // 用户类型：统一使用 user::member_id 格式
+          // 在线状态：true=在线，false=离线，undefined=状态不可知
+          const isOnline = item.is_online;
           return {
-            id: item.id, // user::member_id
-            name: item.nickname,
+            id: item.id, // user::member_id（标准化格式）
+            name: item.nickname || item.display_name, // 显示名称（昵称）
             description: "用户",
             type: "user" as const,
-            isOnline: item.is_online || false, // 从后端获取在线状态
+            isOnline: typeof isOnline === "boolean" ? isOnline : undefined, // 保持 undefined 表示状态不可知
           };
         } else {
-          // Agent 类型 - 需要获取描述信息
-          // 尝试从详细格式API获取描述
+          // Agent 类型：统一使用 agent_id（如 "chat", "rag", "Info_Hunter"）
           return {
-            id: item.nickname, // 使用显示名称作为 ID（如：司仪、书吏）
-            name: item.nickname,
-            description: item.description || "", // simple 格式可能不包含描述
+            id: item.id, // 统一使用 agent_id（标准化：如 "chat", "rag", "Info_Hunter"）
+            name: item.nickname || item.display_name, // 显示名称（用于UI展示，如 "司仪", "书吏"）
+            description: item.description || "", // 描述信息
             type: "agent" as const,
           };
         }
@@ -84,18 +83,19 @@ export async function fetchChatModels(includeUsers: boolean = false): Promise<Ch
 
 /**
  * 后备模型列表（当无法从后端获取时使用）
+ * 标准化：使用 agent_id 作为 id
  */
 function getFallbackModels(): ChatModel[] {
   return [
     {
-      id: "司仪",
-      name: "司仪",
+      id: "chat", // 标准化：使用 agent_id
+      name: "司仪", // 显示名称
       description: "普通聊天助手，可以进行日常对话",
       type: "agent",
     },
     {
-      id: "书吏",
-      name: "书吏",
+      id: "rag", // 标准化：使用 agent_id
+      name: "书吏", // 显示名称
       description: "知识库问答助手，基于上传的文件进行智能问答",
       type: "agent",
     },
@@ -109,11 +109,24 @@ const pendingRequests: Record<string, Promise<ChatModel[]>> = {};
 const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
 /**
+ * 清除用户列表缓存（用于刷新在线状态）
+ */
+export function clearModelsCache(includeUsers: boolean = true) {
+  const cacheKey = `models_${includeUsers}`;
+  delete modelsCache[cacheKey];
+  // 如果清除用户列表缓存，也清除包含用户的缓存
+  if (includeUsers) {
+    delete modelsCache["models_true"];
+  }
+}
+
+/**
  * React Hook：在客户端组件中获取模型列表
  * 使用模块级缓存和请求去重，避免重复查询
  * @param includeUsers 是否包含用户列表（仅登录用户）
+ * @param refreshKey 刷新键，改变时会强制重新获取（用于刷新在线状态）
  */
-export function useChatModels(includeUsers: boolean = false) {
+export function useChatModels(includeUsers: boolean = false, refreshKey: number = 0) {
   const [models, setModels] = useState<ChatModel[]>(getFallbackModels());
   const [loading, setLoading] = useState(true);
 
@@ -122,8 +135,11 @@ export function useChatModels(includeUsers: boolean = false) {
     const cached = modelsCache[cacheKey];
     const now = Date.now();
     
-    // 如果缓存有效，直接使用
-    if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+    // 如果 refreshKey > 0，表示需要强制刷新，跳过缓存检查
+    const shouldUseCache = refreshKey === 0 && cached && (now - cached.timestamp) < CACHE_DURATION;
+    
+    // 如果缓存有效且不需要强制刷新，直接使用
+    if (shouldUseCache) {
       setModels(cached.models);
       setLoading(false);
       return;
@@ -178,7 +194,7 @@ export function useChatModels(includeUsers: boolean = false) {
       .catch(() => {
         setLoading(false);
       });
-  }, [includeUsers]);
+  }, [includeUsers, refreshKey]); // 添加 refreshKey 作为依赖
 
   return { models, loading };
 }

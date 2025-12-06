@@ -21,7 +21,7 @@ export const postRequestBodySchema = z.object({
     role: z.enum(["user"]),
     parts: z.array(partSchema),
   }),
-  selectedChatModel: z.string(), // 允许动态的 agent 名称（如：司仪、书吏）
+  selectedChatModel: z.string(), // Agent ID（标准化，如 "chat", "rag"）或 User ID（格式：user::member_id）
   selectedVisibilityType: z.enum(["public", "private"]),
 });
 

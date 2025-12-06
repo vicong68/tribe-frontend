@@ -9,12 +9,19 @@
 /**
  * 生成统一的 session_id
  * 
- * @param participant1 参与者1（通常是用户ID）
- * @param participant2 参与者2（通常是 Agent 名称或用户ID）
+ * 标准格式：session_{participant1}_{participant2}
+ * 规则：
+ * 1. participant1 和 participant2 按字母序排序，确保顺序一致
+ * 2. 如果 participant2 是 user::member_id 格式，自动移除 user:: 前缀
+ * 3. 所有 ID 必须大小写敏感，不进行转换
+ * 
+ * @param participant1 参与者1（通常是用户ID，member_id）
+ * @param participant2 参与者2（Agent ID 如 "chat"/"rag"，或 user::member_id 格式的用户ID）
  * @returns 格式化的 session_id: session_{participant1}_{participant2}
  * 
  * @example
- * generateSessionId("user123", "司仪") // "session_司仪_user123"
+ * generateSessionId("Vicong", "chat") // "session_Vicong_chat"
+ * generateSessionId("Vicong", "user::RedWM") // "session_RedWM_Vicong" (移除 user:: 前缀)
  * generateSessionId("user123", "user456") // "session_user123_user456"
  * generateSessionId("user456", "user123") // "session_user123_user456" (顺序一致)
  */
@@ -22,8 +29,20 @@ export function generateSessionId(
   participant1: string,
   participant2: string
 ): string {
-  // 按字母序排序，确保顺序一致
-  const [p1, p2] = [participant1, participant2].sort();
+  // 标准化 participant2：如果是 user::member_id 格式，移除 user:: 前缀
+  let normalizedP2 = participant2;
+  if (normalizedP2.startsWith("user::")) {
+    normalizedP2 = normalizedP2.substring(6); // 移除 "user::" 前缀
+  }
+  
+  // 标准化 participant1：确保是纯 ID（不包含前缀）
+  let normalizedP1 = participant1;
+  if (normalizedP1.startsWith("user::")) {
+    normalizedP1 = normalizedP1.substring(6); // 移除 "user::" 前缀
+  }
+  
+  // 按字母序排序，确保顺序一致（大小写敏感）
+  const [p1, p2] = [normalizedP1, normalizedP2].sort();
   return `session_${p1}_${p2}`;
 }
 

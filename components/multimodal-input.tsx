@@ -180,21 +180,43 @@ function PureMultimodalInput({
         const existingMetadata = lastUserMessage.metadata || {};
         
         // 从 selectedModelId 获取 receiverName
+        // 注意：必须确保 selectedModelId 是有效的 agent_id 或 user::member_id
+        // 如果 selectedModelId 是 user:: 开头，说明是用户-用户对话
+        const isUserToUser = selectedModelId.startsWith("user::");
         const selectedChatModel = chatModels.find((m) => m.id === selectedModelId);
-        const receiverName = selectedChatModel?.name || selectedModelId;
+        
+        // 如果找不到匹配的模型，可能是访客状态下 chatModels 还未加载完成
+        // 此时使用 selectedModelId 作为临时值，服务器端会返回正确的 receiverName
+        let receiverName = selectedChatModel?.name || selectedModelId;
+        
+        // 如果 selectedModelId 是 user:: 开头但找不到匹配的用户，移除 user:: 前缀作为临时值
+        if (isUserToUser && !selectedChatModel) {
+          receiverName = selectedModelId.replace(/^user::/, "");
+        }
         
         // 构建临时 metadata（服务器端会发送完整的 metadata）
+        // 访客用户显示中文"访客"，登录用户显示memberId或email前缀
+        let tempSenderName = existingMetadata.senderName;
+        if (!tempSenderName) {
+          if (session?.user?.type === "guest") {
+            tempSenderName = "访客";
+          } else {
+            tempSenderName = session?.user?.email?.split("@")[0] || "我";
+          }
+        }
+        
         const tempMetadata: Record<string, any> = {
           ...existingMetadata, // 保留现有 metadata
           createdAt: existingMetadata.createdAt || new Date().toISOString(),
           senderId: existingMetadata.senderId || session?.user?.memberId || session?.user?.email?.split("@")[0] || session?.user?.id || "guest_user",
-          senderName: existingMetadata.senderName || session?.user?.email?.split("@")[0] || "我",
+          senderName: tempSenderName,
           receiverId: existingMetadata.receiverId || selectedModelId,
           receiverName: existingMetadata.receiverName || receiverName,
-          communicationType: existingMetadata.communicationType || (selectedChatModel?.type === "user" ? "user_user" : "user_agent"),
+          communicationType: existingMetadata.communicationType || (isUserToUser ? "user_user" : "user_agent"),
         };
         
-        if (selectedChatModel?.type !== "user") {
+        // 只有非用户-用户对话才设置 agentUsed
+        if (!isUserToUser) {
           tempMetadata.agentUsed = existingMetadata.agentUsed || selectedModelId;
         }
         

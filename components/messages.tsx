@@ -148,8 +148,8 @@ function PureMessages({
               />
           ))}
 
-          {/* 仅在等待agent回复时显示思考消息（不显示远端用户消息的等待） */}
-          {status === "submitted" && (
+          {/* 仅在等待agent回复时显示思考消息（不显示用户-用户通信的等待） */}
+          {status === "submitted" && !selectedModelId.startsWith("user::") && (
             <ThinkingMessage 
               agentName={selectedModelId} 
               selectedModelId={selectedModelId}

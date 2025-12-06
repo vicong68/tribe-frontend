@@ -208,6 +208,22 @@ export function useSSEMessages(userId: string | null) {
             // 添加到消息列表
             setMessages((prev) => [...prev, message]);
 
+            // 处理用户状态更新（广播消息）
+            if (message.message_type === "user_status_update" && message.communication_type === "system_broadcast") {
+              try {
+                const statusData = JSON.parse(message.content);
+                // 触发全局事件，通知所有组件更新用户状态
+                window.dispatchEvent(new CustomEvent("sse_user_status_update", {
+                  detail: {
+                    member_id: statusData.member_id,
+                    is_online: statusData.is_online,
+                  },
+                }));
+              } catch (error) {
+                console.error("[SSE] 解析用户状态更新失败:", error);
+              }
+            }
+
             // 触发消息处理器
             messageHandlersRef.current.forEach((handler) => {
               try {
@@ -330,6 +346,27 @@ export function useSSEMessages(userId: string | null) {
       reconnect();
     }
   }, [isOnline, status, userId, reconnect]);
+
+  // 浏览器关闭/页面卸载时标记离线（兜底处理）
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const handleBeforeUnload = () => {
+      // 使用 sendBeacon 更新后端离线状态（不阻塞页面关闭）
+      // 动态导入避免循环依赖
+      import("@/lib/user-utils").then(({ updateBackendOfflineStatusWithBeacon }) => {
+        updateBackendOfflineStatusWithBeacon(userId);
+      });
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [userId]);
 
   return {
     messages,

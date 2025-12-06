@@ -72,18 +72,21 @@ const PurePreviewMessage = ({
   // 判断是否为Agent消息
   // 注意：在流式传输过程中，metadata可能为空，此时需要根据selectedModelId判断
   // 如果selectedModelId存在且不是user::开头，则认为是Agent消息
-  const isAgent = isAgentMessage(message.role, metadata.communicationType) ||
-    (message.role === "assistant" && !metadata.communicationType && selectedModelId && !selectedModelId.startsWith("user::"));
-  const isRemoteUser = isRemoteUserMessage(message.role, metadata.communicationType);
+  const isAgent = isAgentMessage(message.role, (metadata as any).communicationType) ||
+    (message.role === "assistant" && !(metadata as any).communicationType && selectedModelId && !selectedModelId.startsWith("user::"));
+  const isRemoteUser = isRemoteUserMessage(message.role, (metadata as any).communicationType);
   const isLocalUser = message.role === "user";
   
   // 判断是否需要从chatModels查找名称（仅在metadata中没有名称时）
   // 新消息：metadata已固化，包含准确的名称
   // 旧消息：可能没有metadata.senderName，需要从chatModels查找作为兜底
-  const needsChatModelsLookup = !isLocalUser && !metadata.senderName && !metadata.agentUsed;
+  // 注意：对于Agent消息，即使metadata中有agentUsed（agent_id），也需要从chatModels查找显示名称
+  const needsChatModelsLookup = !isLocalUser && (!(metadata as any).senderName || (isAgent && (metadata as any).agentUsed && !(metadata as any).senderName));
   const isLoggedIn = session?.user?.type === "regular";
   // Hooks必须在顶层调用，但可以通过参数控制是否实际加载
-  const { models: chatModels } = useChatModels(needsChatModelsLookup && isLoggedIn);
+  // 对于Agent消息，即使访客用户也需要加载chatModels以查找agent显示名称
+  // 注意：访客用户也需要加载chatModels以查找agent显示名称，但不包含用户列表
+  const { models: chatModels } = useChatModels(false); // 总是加载agents列表，但不包含用户列表
   
   // 获取准确的发送者名称
   // 优先使用metadata（新消息已固化），如果metadata中没有则从chatModels查找（兼容旧消息）
@@ -91,47 +94,61 @@ const PurePreviewMessage = ({
   let senderName: string;
   if (isLocalUser) {
     // 本地用户：优先使用metadata，其次从session获取
-    senderName = metadata.senderName || session?.user?.email?.split("@")[0] || "我";
+    // 访客用户显示中文"访客"，登录用户显示memberId或email前缀
+    if (session?.user?.type === "guest") {
+      senderName = (metadata as any).senderName || "访客";
+    } else {
+      senderName = (metadata as any).senderName || session?.user?.email?.split("@")[0] || "我";
+    }
   } else {
     // Assistant消息：可能是Agent或远端用户
     // 注意：对于Assistant消息，必须通过communicationType区分Agent和远端用户
     // 但在流式传输过程中，如果metadata为空，使用selectedModelId判断
     if (isAgent) {
-      // Agent消息：优先使用metadata.senderName（已固化），其次使用agentUsed
-      senderName = metadata.senderName || metadata.agentUsed;
+      // Agent消息：优先使用metadata.senderName（已固化，应该是显示名称）
+      senderName = (metadata as any).senderName || "";
       
-      // 如果metadata中没有名称，从chatModels查找（兼容旧消息或查询失败的情况）
-      if (!senderName && needsChatModelsLookup && chatModels.length > 0) {
-        const senderId = metadata.senderId;
-        const agentUsed = metadata.agentUsed;
-        
+      // 如果metadata中没有senderName，但有agentUsed（agent_id），从chatModels查找显示名称
+      if (!senderName && (metadata as any).agentUsed && chatModels.length > 0) {
+        const agentUsed = (metadata as any).agentUsed; // agent_id（如 "chat"）
         const foundAgent = chatModels.find(
-          (m) => m.type === "agent" && (
-            m.id === senderId || 
-            m.id === agentUsed ||
-            m.name === agentUsed
-          )
+          (m) => m.type === "agent" && m.id === agentUsed
         );
-        senderName = foundAgent?.name || agentUsed;
+        senderName = foundAgent?.name || ""; // 使用显示名称（如 "司仪"）
       }
       
-      // 流式传输过程中，如果 metadata 为空，优先使用 selectedModelId（发送消息时选中的 agent）
-      // 这样可以避免显示"智能体"，而是显示实际的 agent ID（如"司仪"）
-      // 这是接收阶段的临时名称显示，用于在 data-appendMessage 到达之前显示正确的名称
+      // 如果还是没有找到，尝试使用senderId查找
+      if (!senderName && (metadata as any).senderId && chatModels.length > 0) {
+        const senderId = (metadata as any).senderId;
+        const foundAgent = chatModels.find(
+          (m) => m.type === "agent" && m.id === senderId
+        );
+        senderName = foundAgent?.name || "";
+      }
+      
+      // 流式传输过程中，如果 metadata 为空，使用 selectedModelId 从 chatModels 查找显示名称
+      if (!senderName && selectedModelId && chatModels.length > 0) {
+        const foundAgent = chatModels.find(
+          (m) => m.type === "agent" && m.id === selectedModelId
+        );
+        senderName = foundAgent?.name || "";
+      }
+      
+      // 最后的兜底：如果都找不到，使用默认值（不应该发生）
       if (!senderName) {
-        senderName = selectedModelId || "智能体";
+        senderName = (metadata as any).agentUsed || selectedModelId || "智能体";
       }
     } else if (isRemoteUser) {
       // 远端用户消息：优先使用metadata.senderName
-      senderName = metadata.senderName;
+      senderName = (metadata as any).senderName || "";
       
       // 如果metadata中没有名称，从chatModels查找
       if (!senderName && needsChatModelsLookup && chatModels.length > 0) {
-        const senderId = metadata.senderId;
+        const senderId = (metadata as any).senderId;
         const foundUser = chatModels.find(
           (m) => m.type === "user" && (
             m.id === senderId || 
-            m.name === metadata.senderName
+            m.name === (metadata as any).senderName
           )
         );
         senderName = foundUser?.name || "用户";
@@ -144,28 +161,28 @@ const PurePreviewMessage = ({
     } else {
       // 其他情况（可能是metadata为空时的assistant消息）
       // 在流式传输过程中，如果metadata为空，使用selectedModelId作为临时名称
-      senderName = metadata.senderName || metadata.agentUsed || selectedModelId || "智能体";
+      senderName = (metadata as any).senderName || (metadata as any).agentUsed || selectedModelId || "智能体";
     }
   }
   
   // 使用缓存的metadata，避免重复访问
-  const receiverName = metadata.receiverName;
-  const communicationType = metadata.communicationType;
+  const receiverName = (metadata as any).receiverName;
+  const communicationType = (metadata as any).communicationType;
   
   // 获取头像信息（固化：使用消息的senderId或senderName作为种子）
   const avatarSeed = isLocalUser 
     ? (session?.user?.memberId || session?.user?.email || session?.user?.id || "user")
-    : (metadata.senderId || senderName);
+    : ((metadata as any).senderId || senderName);
   
   // 获取头像信息（包含图标变体）
   const avatarInfo = getAvatarInfo(
     senderName,
     avatarSeed,
-    isAgent && !isRemoteUser
+    !!(isAgent && !isRemoteUser)
   );
   
   // 是否需要显示等待效果（仅agent需要）
-  const showThinking = isAgent && isLoading;
+  const showThinking = !!(isAgent && isLoading);
 
   // 渲染消息内容
   const renderMessageContent = () => {
@@ -422,7 +439,7 @@ const PurePreviewMessage = ({
         <div className="flex items-start gap-3">
           <div className="flex flex-col items-center gap-1 shrink-0">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-800">
-              <UserIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+              <UserIcon variant={0} />
             </div>
           </div>
           <div className="flex-1">
@@ -575,7 +592,25 @@ export const ThinkingMessage = ({
   agentName?: string;
   selectedModelId?: string;
 }) => {
-  const displayAgentName = agentName || selectedModelId || "智能体";
+  // 获取 chatModels 以查找 agent 的显示名称
+  const { models: chatModels } = useChatModels(false); // 总是加载 agents 列表，但不包含用户列表
+  
+  // 优先使用传入的 agentName（如果已经是显示名称）
+  // 否则从 chatModels 查找 selectedModelId 对应的显示名称
+  let displayAgentName = agentName || "";
+  
+  // 如果 agentName 不存在或等于 selectedModelId（可能是 agent_id），从 chatModels 查找显示名称
+  if (!displayAgentName || displayAgentName === selectedModelId) {
+    if (selectedModelId && chatModels.length > 0) {
+      const foundAgent = chatModels.find(
+        (m) => m.type === "agent" && m.id === selectedModelId
+      );
+      displayAgentName = foundAgent?.name || selectedModelId || "智能体";
+    } else {
+      displayAgentName = selectedModelId || "智能体";
+    }
+  }
+  
   const avatarInfo = getAvatarInfo(displayAgentName, selectedModelId || displayAgentName, true);
 
   return (

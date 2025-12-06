@@ -81,8 +81,48 @@ export function useAutoResume({
     const dataPart = dataStream[0];
 
     if (dataPart.type === "data-appendMessage") {
-      const message = JSON.parse(dataPart.data);
-      setMessages([...initialMessages, message]);
+      const message = JSON.parse(dataPart.data) as ChatMessage;
+      
+      // 检查消息是否已经存在（通过 ID 或 originalMessageId）
+      // 如果存在，则更新而不是添加，避免重复
+      setMessages((prevMessages) => {
+        const existingIndex = prevMessages.findIndex(
+          (msg) =>
+            msg.id === message.id ||
+            msg.metadata?.originalMessageId === message.id ||
+            (message.metadata?.originalMessageId && msg.id === message.metadata.originalMessageId)
+        );
+        
+        if (existingIndex >= 0) {
+          // 消息已存在，更新它（使用更完整的内容）
+          const updatedMessages = [...prevMessages];
+          const existingMessage = updatedMessages[existingIndex];
+          
+          // 比较消息内容，如果新消息更完整，则替换
+          // 检查文本内容的长度，更长的通常更完整
+          const existingText = existingMessage.parts?.find((p: any) => p.type === "text")?.text || "";
+          const newText = message.parts?.find((p: any) => p.type === "text")?.text || "";
+          
+          if (newText.length >= existingText.length) {
+            // 新消息更完整，替换旧消息
+            updatedMessages[existingIndex] = {
+              ...existingMessage,
+              ...message,
+              // 保留原有的 createdAt（如果存在），确保时间戳正确
+              metadata: {
+                ...existingMessage.metadata,
+                ...message.metadata,
+                createdAt: existingMessage.metadata?.createdAt || message.metadata?.createdAt || new Date().toISOString(),
+              },
+            };
+          }
+          
+          return updatedMessages;
+        } else {
+          // 消息不存在，添加到列表末尾
+          return [...prevMessages, message];
+        }
+      });
     }
-  }, [dataStream, initialMessages, setMessages]);
+  }, [dataStream, setMessages]);
 }

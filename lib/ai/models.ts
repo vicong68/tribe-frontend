@@ -1,4 +1,5 @@
-export const DEFAULT_CHAT_MODEL: string = "司仪";
+// 标准化：使用 agent_id 作为默认模型
+export const DEFAULT_CHAT_MODEL: string = "chat"; // 对应 "司仪"
 
 export type ChatModel = {
   id: string;
@@ -33,19 +34,18 @@ async function fetchAgentsFromBackend(): Promise<ChatModel[]> {
     const data = await response.json();
     const agents = data.agents || [];
 
-    // 过滤出静态 agents（chat 和 rag），并映射为模型格式
-    const staticAgents = agents.filter((agent: any) => 
-      STATIC_AGENTS.includes(agent.name)
-    );
+    // 包含所有 agents（静态、动态），不再过滤
+    // 注意：后端API已经返回所有agents，包括静态和动态
+    const allAgents = agents;
 
-    // 转换为 ChatModel 格式
-    const models: ChatModel[] = staticAgents.map((agent: any) => {
-      // 使用第一个显示名称作为模型名称
+    // 转换为 ChatModel 格式（标准化：使用 agent_id）
+    const models: ChatModel[] = allAgents.map((agent: any) => {
+      // 使用第一个显示名称作为模型显示名称
       const displayName = agent.display_names?.[0] || agent.chinese_names?.[0] || agent.name;
       
       return {
-        id: displayName, // 使用显示名称作为 ID（如：司仪、书吏）
-        name: displayName,
+        id: agent.name, // 标准化：使用 agent_id（如 "chat", "rag"）
+        name: displayName, // 显示名称（如 "司仪", "书吏"）
         description: agent.description || "",
       };
     });
@@ -63,16 +63,17 @@ async function fetchAgentsFromBackend(): Promise<ChatModel[]> {
 }
 
 // 后备模型列表（当无法从后端获取时使用）
+// 标准化：使用 agent_id 作为 id
 function getFallbackModels(): ChatModel[] {
   return [
     {
-      id: "司仪",
-      name: "司仪",
+      id: "chat", // 标准化：使用 agent_id
+      name: "司仪", // 显示名称
       description: "普通聊天助手，可以进行日常对话",
     },
     {
-      id: "书吏",
-      name: "书吏",
+      id: "rag", // 标准化：使用 agent_id
+      name: "书吏", // 显示名称
       description: "知识库问答助手，基于上传的文件进行智能问答",
     },
   ];
