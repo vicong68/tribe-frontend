@@ -1,9 +1,34 @@
-import { compare } from "bcrypt-ts"
 import NextAuth, { type DefaultSession } from "next-auth"
 import type { DefaultJWT } from "next-auth/jwt"
 import Credentials from "next-auth/providers/credentials"
-import { DUMMY_PASSWORD } from "@/lib/constants"
-import { createGuestUser, getUser, createUser } from "@/lib/db/queries"
+
+let compare: typeof import("bcrypt-ts").compare
+let createGuestUser: typeof import("@/lib/db/queries").createGuestUser
+let getUser: typeof import("@/lib/db/queries").getUser
+let createUser: typeof import("@/lib/db/queries").createUser
+let DUMMY_PASSWORD: string
+
+// Check if we're in a proper server environment with database access
+const isServerEnvironment = typeof process !== "undefined" && process.env.POSTGRES_URL
+
+if (isServerEnvironment) {
+  try {
+    const bcrypt = await import("bcrypt-ts")
+    compare = bcrypt.compare
+    const queries = await import("@/lib/db/queries")
+    createGuestUser = queries.createGuestUser
+    getUser = queries.getUser
+    createUser = queries.createUser
+    const constants = await import("@/lib/constants")
+    DUMMY_PASSWORD = constants.DUMMY_PASSWORD
+  } catch (e) {
+    console.warn("[auth] Failed to load server modules:", e)
+  }
+}
+
+// Fallback implementations for v0 preview
+const fallbackCompare = async () => false
+const fallbackDummyPassword = ""
 
 const authConfig = {
   pages: {
@@ -27,16 +52,15 @@ declare module "next-auth" {
       id: string
       email?: string | null
       type: UserType
-      memberId?: string | null // 后端用户 ID（member_id）
+      memberId?: string | null
     } & DefaultSession["user"]
   }
 
-  // biome-ignore lint/nursery/useConsistentTypeDefinitions: "Required"
   interface User {
     id?: string
     email?: string | null
     type: UserType
-    memberId?: string | null // 后端用户 ID（member_id）
+    memberId?: string | null
   }
 }
 
@@ -45,7 +69,7 @@ declare module "next-auth/jwt" {
     id: string
     email?: string | null
     type: UserType
-    memberId?: string | null // 后端用户 ID（member_id）
+    memberId?: string | null
   }
 }
 
@@ -63,17 +87,19 @@ export const {
         password: { label: "密码", type: "password" },
       },
       async authorize(credentials) {
+        if (!isServerEnvironment || !compare) {
+          console.warn("[auth] Server modules not available, returning null")
+          return null
+        }
+
         if (!credentials?.email || !credentials?.password) {
           return null
         }
 
-        // 明确类型转换
         const email = String(credentials.email)
         const password = String(credentials.password)
 
         try {
-          // 调用内部认证 API 路由（更安全，统一错误处理）
-          // 在服务器端，使用环境变量或默认值
           const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:8000"
           const loginUrl = `${baseUrl}/api/auth/backend/login`
 
@@ -94,52 +120,44 @@ export const {
               email,
               password,
             }),
-            // 添加超时控制（10秒）
             signal: AbortSignal.timeout(10000),
           })
 
           if (!response.ok) {
-            // 登录失败，防止时序攻击
-            await compare(password, DUMMY_PASSWORD)
+            await compare(password, DUMMY_PASSWORD || fallbackDummyPassword)
             return null
           }
 
           const data = await response.json()
 
           if (!data.success || !data.user) {
-            await compare(password, DUMMY_PASSWORD)
+            await compare(password, DUMMY_PASSWORD || fallbackDummyPassword)
             return null
           }
 
-          // 同步用户到前端数据库（如果不存在则创建）
           let frontendUser = await getUser(email)
           if (frontendUser.length === 0) {
-            // 用户不存在，创建新用户（不存储密码，因为认证在后端）
             await createUser(email, "")
             frontendUser = await getUser(email)
           }
 
           if (frontendUser.length === 0) {
-            // 创建失败，防止时序攻击
-            await compare(password, DUMMY_PASSWORD)
+            await compare(password, DUMMY_PASSWORD || fallbackDummyPassword)
             return null
           }
 
-          // 返回用户信息，使用前端数据库的 UUID 作为 id
           const [user] = frontendUser
-          // 从后端返回的数据中获取 member_id
           const backendMemberId = data.user.member_id || null
           return {
             id: user.id,
-            email: email, // 确保是 string 类型
+            email: email,
             name: (data.user.nickname || email) as string,
             type: "regular" as const,
-            memberId: backendMemberId, // 存储后端用户 ID
+            memberId: backendMemberId,
           }
         } catch (error) {
-          // 网络错误或其他错误，防止时序攻击
           console.error("[Auth] 认证错误:", error)
-          await compare(password, DUMMY_PASSWORD)
+          await (compare || fallbackCompare)(password, DUMMY_PASSWORD || fallbackDummyPassword)
           return null
         }
       },
@@ -148,6 +166,17 @@ export const {
       id: "guest",
       credentials: {},
       async authorize() {
+        if (!isServerEnvironment || !createGuestUser) {
+          console.warn("[auth] Creating mock guest user for v0 preview")
+          return {
+            id: `guest-${Date.now()}`,
+            email: null,
+            name: "Guest",
+            type: "guest" as const,
+            memberId: null,
+          }
+        }
+
         const [guestUser] = await createGuestUser()
         return {
           id: guestUser.id,
@@ -165,7 +194,7 @@ export const {
         token.id = user.id as string
         token.type = user.type
         token.email = user.email || null
-        token.memberId = user.memberId || null // 存储后端用户 ID
+        token.memberId = user.memberId || null
       }
 
       return token
@@ -174,11 +203,9 @@ export const {
       if (session.user) {
         session.user.id = token.id
         session.user.type = token.type
-        // 确保 email 字段被传递到 session
         if (token.email) {
           session.user.email = token.email
         }
-        // 传递后端用户 ID
         if (token.memberId) {
           session.user.memberId = token.memberId
         }
