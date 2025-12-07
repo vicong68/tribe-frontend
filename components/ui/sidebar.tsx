@@ -26,10 +26,15 @@ import { cn } from "@/lib/utils";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-const SIDEBAR_WIDTH = "16rem";
+const SIDEBAR_WIDTH = "13.824rem"; // 减少10%：15.36rem * 0.9 = 13.824rem（减少了1.536rem）
 const SIDEBAR_WIDTH_MOBILE = "18rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
+// 右侧对话管理面板宽度：固定值 9rem（刚好适配三个图标：新对话+对话状态设置下拉+删除所有对话，确保删除图标完整显示）
+// 注意：这是对话管理面板（RightSidebar）的宽度，不是知识库面板（RightFixedPanel）的宽度
+// 实际宽度由 ConversationPanel 组件设置到 CSS 变量 --right-conversation-panel-width
+// 对话管理面板使用 offcanvas 模式，展开时平移向左弹出，收缩时平移向右隐藏
+const RIGHT_CONVERSATION_PANEL_WIDTH = "9rem"; // 固定值 9rem
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
@@ -121,6 +126,14 @@ const SidebarProvider = React.forwardRef<
     // This makes it easier to style the sidebar with Tailwind classes.
     const state = open ? "expanded" : "collapsed";
 
+    // 设置 CSS 变量，供 SidebarInset 等组件使用，实现聊天区域随动
+    React.useEffect(() => {
+      document.documentElement.style.setProperty("--left-sidebar-state", state);
+      document.documentElement.style.setProperty("--left-sidebar-width", "4rem");
+      document.documentElement.style.setProperty("--sidebar-width", SIDEBAR_WIDTH);
+      document.documentElement.style.setProperty("--sidebar-width-icon", SIDEBAR_WIDTH_ICON);
+    }, [state]);
+
     const contextValue = React.useMemo<SidebarContextProps>(
       () => ({
         state,
@@ -145,8 +158,14 @@ const SidebarProvider = React.forwardRef<
             ref={ref}
             style={
               {
+                "--left-sidebar-width": "4rem",
                 "--sidebar-width": SIDEBAR_WIDTH,
                 "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
+                "--content-gap": "1rem",
+                "--chat-max-width": "56rem",
+                "--right-sidebar-width": SIDEBAR_WIDTH,
+                "--right-sidebar-width-icon": SIDEBAR_WIDTH_ICON,
+                "--right-conversation-panel-width": RIGHT_CONVERSATION_PANEL_WIDTH, // 对话管理面板宽度（等于知识库面板展开时左移宽度）
                 ...style,
               } as React.CSSProperties
             }
@@ -180,7 +199,29 @@ const Sidebar = React.forwardRef<
     },
     ref
   ) => {
-    const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+    // 左侧边栏：使用左侧边栏的状态（通过 SidebarProvider）
+    // 右侧边栏：尝试从 RightSidebarProvider 读取状态，如果不可用则使用默认值
+    const leftSidebar = useSidebar();
+    
+    // 尝试获取右侧边栏状态
+    let rightSidebarState: "expanded" | "collapsed" = "expanded";
+    if (side === "right") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { useRightSidebar } = require("@/components/right-sidebar-provider");
+        const rightSidebar = useRightSidebar();
+        rightSidebarState = rightSidebar.state;
+      } catch {
+        // 如果不在 RightSidebarProvider 内，使用默认值
+        rightSidebarState = "expanded";
+      }
+    }
+    
+    // 左侧边栏：使用左侧状态；右侧边栏：使用右侧状态
+    const state = side === "left" ? leftSidebar.state : rightSidebarState;
+    const isMobile = leftSidebar.isMobile;
+    const openMobile = leftSidebar.openMobile;
+    const setOpenMobile = leftSidebar.setOpenMobile;
 
     if (collapsible === "none") {
       return (
@@ -229,28 +270,38 @@ const Sidebar = React.forwardRef<
         data-state={state}
         data-variant={variant}
         ref={ref}
+        style={
+          side === "right"
+            ? {
+                "--right-sidebar-state": state,
+              } as React.CSSProperties
+            : undefined
+        }
       >
-        {/* This is what handles the sidebar gap on desktop */}
+        {/* 左侧边栏：独立弹出，不占用布局空间 */}
+        {side === "left" ? (
+          // 左侧边栏：移除gap div，使其完全独立弹出
+          null
+        ) : (
+          // 右侧边栏：移除gap div，使其完全独立弹出（与左侧边栏一致）
+          null
+        )}
         <div
           className={cn(
-            "relative w-[var(--sidebar-width)] bg-transparent transition-[width] duration-200 ease-linear",
-            "group-data-[collapsible=offcanvas]:w-0",
-            "group-data-[side=right]:rotate-180",
-            variant === "floating" || variant === "inset"
-              ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)_+_theme(spacing.4))]"
-              : "group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)]"
-          )}
-        />
-        <div
-          className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-[var(--sidebar-width)] transition-[left,right,width] duration-200 ease-linear md:flex",
+            "fixed inset-y-0 hidden h-svh transition-[left,right,width] duration-200 ease-linear md:flex",
+            // 左侧边栏：独立弹出，z-index低于固定栏，叠加在背景上
+            // 折叠时（offcanvas模式）：完全隐藏到左侧固定栏左侧（负值，完全移出视野）
             side === "left"
-              ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
-              : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
+              ? "z-50 w-[var(--sidebar-width)] left-[var(--left-sidebar-width,4rem)] group-data-[collapsible=offcanvas]:left-[calc(var(--left-sidebar-width,4rem)_-_var(--sidebar-width))]"
+              : "z-10 w-[var(--right-conversation-panel-width, var(--sidebar-width))] right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--right-conversation-panel-width, var(--sidebar-width))*-1)]", // 对话管理面板：展开时 right-0（对齐页面最右端），收缩时 right: -width（完全隐藏）
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
+              ? side === "left"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)_+_theme(spacing.4)_+2px)]"
-              : "group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)] group-data-[side=left]:border-r group-data-[side=right]:border-l",
+                : "p-2"
+              : side === "left"
+                ? "group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)]"
+                : "", // 右侧边栏使用 offcanvas 模式，无需 icon 模式宽度
             className
           )}
           {...props}
@@ -326,7 +377,54 @@ SidebarRail.displayName = "SidebarRail";
 const SidebarInset = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"main">
->(({ className, ...props }, ref) => {
+>(({ className, style, ...props }, ref) => {
+  const { state: leftState, isMobile } = useSidebar();
+  
+  // 获取右侧对话管理面板的状态
+  let rightState: "expanded" | "collapsed" = "collapsed";
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { useRightSidebar } = require("@/components/right-sidebar-provider");
+    const rightSidebar = useRightSidebar();
+    rightState = rightSidebar.state;
+  } catch {
+    // 如果不在 RightSidebarProvider 内，使用默认值
+  }
+  
+  // 聊天区域随动计算：跟随左右面板折叠/展开进行随动渲染
+  // 1. 主面板（左侧固定边栏）：left: 0, width: 4rem (--left-sidebar-width)
+  // 2. 左侧用户面板（可折叠边栏）：展开时 width: 13.824rem，折叠时 width: 0
+  //    通过 CSS 变量 --sidebar-width 和 --sidebar-width-icon 控制
+  // 3. 右侧知识库面板：width 动态计算（主内容区域的36%），right 位置随对话管理面板状态变化
+  // 4. 右侧对话管理面板：宽度等于知识库面板展开时左移的距离（即知识库面板宽度），使用 offcanvas 模式
+  //    联动模式：收缩时完全隐藏，仅暴露知识库面板；展开时两个面板同时向左移动，移动距离、速度一致
+  //    通过 CSS 变量 --right-conversation-panel-width 控制（由 RightFixedPanel 组件动态计算）
+  // 
+  // 聊天区域可见宽度 = 100vw - 主面板宽度 - 用户面板宽度 - 右侧知识库面板宽度 - 右侧对话管理面板宽度
+  // 聊天区域在这个可见宽度内使用 mx-auto 和 max-w-4xl 居中显示
+  
+  // 左侧内边距 = 主面板宽度 + 用户面板宽度（展开时）
+  const leftSidebarWidth = leftState === "collapsed" 
+    ? "var(--sidebar-width-icon, 3rem)" 
+    : "var(--sidebar-width, 13.824rem)";
+  const paddingLeft = !isMobile
+    ? `calc(var(--left-sidebar-width, 4rem) + ${leftSidebarWidth})`
+    : undefined;
+  
+  // 右侧内边距计算：
+  // - 展开时：右侧知识库面板宽度 + 右侧对话管理面板宽度
+  // - 收缩时：仅右侧知识库面板宽度（对话管理面板完全隐藏，不占用空间）
+  // 右侧知识库面板宽度通过 CSS 变量 --right-knowledge-base-panel-width 传递（主内容区域的36%）
+  // 右侧对话管理面板宽度：展开时从 --right-conversation-panel-width 读取（等于知识库面板展开时左移距离），折叠时 0（offcanvas 模式：完全隐藏）
+  const rightConversationPanelWidth = rightState === "collapsed" 
+    ? "0" // offcanvas 模式：折叠时完全隐藏，不占用空间，仅暴露知识库面板
+    : "var(--right-conversation-panel-width, 9rem)"; // 从CSS变量读取完整宽度（对话管理面板，等于知识库面板展开时左移距离）
+  const paddingRight = !isMobile
+    ? rightState === "collapsed"
+      ? "var(--right-knowledge-base-panel-width, 0px)" // 收缩时：仅知识库面板宽度
+      : `calc(var(--right-knowledge-base-panel-width, 0px) + ${rightConversationPanelWidth})` // 展开时：知识库面板 + 对话管理面板
+    : undefined;
+  
   return (
     <main
       className={cn(
@@ -335,6 +433,11 @@ const SidebarInset = React.forwardRef<
         className
       )}
       ref={ref}
+      style={{
+        ...(paddingLeft && { paddingLeft }),
+        ...(paddingRight && { paddingRight }),
+        ...style,
+      } as React.CSSProperties}
       {...props}
     />
   );

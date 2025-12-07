@@ -366,14 +366,24 @@ export async function getChatById({ id }: { id: string }) {
 
 export async function saveMessages({ messages }: { messages: DBMessage[] }) {
   try {
-    // 使用 ON CONFLICT DO NOTHING 处理重复键冲突（幂等性）
-    // 这可以防止并发请求或重试导致的重复保存错误
-    return await db
-      .insert(message)
-      .values(messages)
-      .onConflictDoNothing({ target: message.id });
+    return await db.insert(message).values(messages);
   } catch (error) {
-    // 输出详细错误信息以便调试
+    // 如果是重复键错误（主键冲突），忽略它（幂等性）
+    // 这可以防止并发请求或重试导致的重复保存错误
+    if (
+      error instanceof Error &&
+      (error.message.includes("duplicate key") ||
+        error.message.includes("UNIQUE constraint") ||
+        error.message.includes("23505")) // PostgreSQL unique violation error code
+    ) {
+      console.warn(
+        `[saveMessages] Message(s) already exist (idempotent), skipping: ${messages.map((m) => m.id).join(", ")}`
+      );
+      // 返回成功，因为消息已经存在
+      return;
+    }
+
+    // 输出详细错误信息以便调试（非重复键错误）
     console.error("[saveMessages] Database error details:", {
       error,
       errorMessage: error instanceof Error ? error.message : String(error),

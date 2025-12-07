@@ -16,22 +16,35 @@ import { ChatSDKError } from "@/lib/errors";
 import { generateSessionId } from "@/lib/session-utils";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
-import { convertToUIMessages, generateUUID, getTextFromMessage, isValidUUID } from "@/lib/utils";
+import { convertToUIMessages, generateUUID, getTextFromMessage, isValidUUID, fetchWithErrorHandlers } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
+import { entityCache } from "@/lib/cache/entity-cache";
 
 const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
 /**
- * 从后端获取 Agent 或用户的显示名称
+ * 从后端获取 Agent 或用户的显示名称（带缓存优化）
  * 仅在消息创建时调用一次，避免重复查询
- * 优化：对于 Agent，如果 targetId 已经是显示名称（如"司仪"、"书吏"），直接返回，无需查询
+ * 优化：
+ * 1. 优先使用缓存，减少API调用
+ * 2. 对于 Agent，如果 targetId 已经是显示名称，直接返回
+ * 3. 批量获取列表时自动更新缓存
  */
 async function getAgentOrUserName(
   targetId: string,
   isUser: boolean
 ): Promise<string | null> {
+  // ✅ 优化：优先从缓存获取
+  const cachedName = isUser
+    ? entityCache.getUserName(targetId)
+    : entityCache.getAgentName(targetId);
+  
+  if (cachedName) {
+    return cachedName;
+  }
+
   try {
     // 添加超时控制（5秒），避免阻塞消息创建流程
     const controller = new AbortController();
@@ -53,6 +66,10 @@ async function getAgentOrUserName(
           // 用户：从后端用户列表获取（targetId 是 member_id）
           // 注意：必须大小写敏感匹配，不能使用toLowerCase/toUpperCase
           const users = data.users || [];
+          
+          // ✅ 优化：缓存整个用户列表
+          entityCache.setUserList(users);
+          
           const user = users.find(
             (item: any) => {
               // 精确匹配：user::member_id 或 member_id（大小写敏感）
@@ -63,24 +80,44 @@ async function getAgentOrUserName(
                      itemMemberId === targetId;
             }
           );
-          return user?.display_name || user?.nickname || null;
+          const displayName = user?.display_name || user?.nickname || null;
+          
+          // ✅ 优化：缓存单个用户名称
+          if (displayName && targetId) {
+            entityCache.setUserName(targetId, displayName);
+          }
+          
+          return displayName;
         } else {
           // Agent：从后端 agent 列表获取（targetId 是 agent_id）
           const agents = data.agents || [];
+          
+          // ✅ 优化：缓存整个Agent列表
+          entityCache.setAgentList(agents);
+          
           const agent = agents.find(
             (item: any) => item.id === targetId
           );
-          return agent?.display_name || targetId; // 如果找不到，使用 targetId 本身
+          const displayName = agent?.display_name || targetId; // 如果找不到，使用 targetId 本身
+          
+          // ✅ 优化：缓存单个Agent名称
+          if (displayName && targetId) {
+            entityCache.setAgentName(targetId, displayName);
+          }
+          
+          return displayName;
         }
       }
     } catch (fetchError) {
       clearTimeout(timeoutId);
       if (fetchError instanceof Error && fetchError.name === "AbortError") {
+        // 超时时返回后备值，但不缓存
         return isUser ? null : targetId;
       }
       throw fetchError;
     }
   } catch (error) {
+    // 错误时返回后备值，但不缓存
     return isUser ? null : targetId;
   }
   return null;
@@ -98,6 +135,13 @@ export async function POST(request: Request) {
     const json = await request.json();
     requestBody = postRequestBodySchema.parse(json);
   } catch (error) {
+    // 记录详细的验证错误信息，便于调试
+    if (process.env.NODE_ENV === "development") {
+      console.error("[Chat API] Schema validation error:", error);
+      if (error instanceof z.ZodError) {
+        console.error("[Chat API] Validation errors:", JSON.stringify(error.errors, null, 2));
+      }
+    }
     return new ChatSDKError("bad_request:api").toResponse();
   }
 
@@ -448,20 +492,52 @@ export async function POST(request: Request) {
       
       // 流式请求不使用超时，因为流式响应可能需要较长时间
       // 超时控制由后端和客户端处理
-      const backendResponse = await fetch(backendUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(backendRequestBody),
-      });
+      // ✅ 优化：使用带重试机制的fetch（指数退避：1s, 2s, 4s, 8s，最大3次）
+      let backendResponse: Response;
+      try {
+        backendResponse = await fetchWithErrorHandlers(
+          backendUrl,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(backendRequestBody),
+          },
+          {
+            maxRetries: 3,
+            retryDelay: 1000,
+            retryableStatuses: [408, 429, 500, 502, 503, 504],
+          }
+        );
+      } catch (fetchError) {
+        // 如果是 ChatSDKError，直接返回
+        if (fetchError instanceof ChatSDKError) {
+          return fetchError.toResponse();
+        }
+        
+        // 其他错误转换为 ChatSDKError
+        const errorMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        return new ChatSDKError("offline:chat", `后端请求失败: ${errorMessage}`).toResponse();
+      }
 
+      // ✅ 修复：fetchWithErrorHandlers 已经处理了错误，这里应该不会到达
+      // 但如果到达这里且响应不ok，说明是重试后仍然失败的情况
       if (!backendResponse.ok) {
         let errorData: any;
         try {
-          errorData = await backendResponse.json();
-        } catch {
-          const errorText = await backendResponse.text();
+          const contentType = backendResponse.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            errorData = await backendResponse.json();
+          } else {
+            const errorText = await backendResponse.text();
+            errorData = { 
+              message: errorText || `${backendResponse.status} ${backendResponse.statusText}`,
+              detail: `后端返回非JSON响应: ${backendResponse.status} ${backendResponse.statusText}`
+            };
+          }
+        } catch (parseError) {
+          // 如果解析失败，使用状态码和状态文本
           return new ChatSDKError(
             "offline:chat",
             `后端服务错误: ${backendResponse.status} ${backendResponse.statusText}`

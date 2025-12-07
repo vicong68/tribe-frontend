@@ -28,6 +28,7 @@ import { BotIcon, UserIcon } from "./icons";
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
+import { UnifiedAvatar } from "./unified-avatar";
 import { PreviewAttachment } from "./preview-attachment";
 import { Weather } from "./weather";
 
@@ -41,6 +42,7 @@ const PurePreviewMessage = ({
   isReadonly,
   requiresScrollPadding: _requiresScrollPadding,
   selectedModelId,
+  sendMessage,
 }: {
   chatId: string;
   message: ChatMessage;
@@ -51,6 +53,7 @@ const PurePreviewMessage = ({
   isReadonly: boolean;
   requiresScrollPadding: boolean;
   selectedModelId?: string;
+  sendMessage?: (message: ChatMessage) => void;
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const { data: session } = useSession();
@@ -169,10 +172,11 @@ const PurePreviewMessage = ({
   const receiverName = (metadata as any).receiverName;
   const communicationType = (metadata as any).communicationType;
   
-  // 获取头像信息（固化：使用消息的senderId或senderName作为种子）
-  const avatarSeed = isLocalUser 
-    ? (session?.user?.memberId || session?.user?.email || session?.user?.id || "user")
-    : ((metadata as any).senderId || senderName);
+  // ✅ 修复 hydration 错误：优先使用 metadata 中固化的 senderId，确保服务器端和客户端一致
+  // 对于用户消息，metadata.senderId 在保存时已固化（backendMemberId）
+  // 对于 Assistant 消息，metadata.senderId 也已在保存时固化
+  // 这样避免依赖 session，确保服务器端和客户端计算相同的 avatarSeed
+  const avatarSeed = (metadata as any).senderId || senderName || "default";
   
   // 获取头像信息（包含图标变体）
   const avatarInfo = getAvatarInfo(
@@ -422,6 +426,9 @@ const PurePreviewMessage = ({
             message={message}
             setMode={setMode}
             vote={vote}
+            setMessages={setMessages}
+            sendMessage={sendMessage}
+            selectedModelId={selectedModelId}
           />
         )}
       </>
@@ -451,21 +458,15 @@ const PurePreviewMessage = ({
     return null;
   }
 
-  // 渲染头像组件（使用变体图标）
+  // 渲染头像组件（使用统一头像组件）
   const renderAvatar = () => (
     <div className="flex flex-col items-center gap-1 shrink-0">
-      <div
-        className="flex size-8 items-center justify-center rounded-full bg-white border border-blue-500"
-        style={{
-          color: "#3B82F6", // 蓝色前景
-        }}
-      >
-        {avatarInfo.isAgent ? (
-          <BotIcon variant={avatarInfo.iconVariant} />
-        ) : (
-          <UserIcon variant={avatarInfo.iconVariant} />
-        )}
-      </div>
+      <UnifiedAvatar
+        name={senderName}
+        id={avatarSeed}
+        isAgent={avatarInfo.isAgent}
+        size={8}
+      />
       <span className="text-muted-foreground text-xs max-w-[3rem] truncate text-center">
         {senderName}
       </span>
@@ -611,8 +612,6 @@ export const ThinkingMessage = ({
     }
   }
   
-  const avatarInfo = getAvatarInfo(displayAgentName, selectedModelId || displayAgentName, true);
-
   return (
     <div
       className="group/message fade-in w-full animate-in duration-300"
@@ -622,13 +621,13 @@ export const ThinkingMessage = ({
       <div className="mx-auto flex w-full max-w-4xl items-start justify-start">
         <div className="flex items-start gap-2 md:gap-3 px-2 md:px-4">
           <div className="flex flex-col items-center gap-1 shrink-0">
-            <div
-              className="flex size-8 items-center justify-center rounded-full bg-white border border-blue-500 animate-pulse"
-              style={{
-                color: "#3B82F6",
-              }}
-            >
-              <BotIcon variant={avatarInfo.iconVariant} />
+            <div className="animate-pulse">
+              <UnifiedAvatar
+                name={displayAgentName}
+                id={selectedModelId || displayAgentName}
+                isAgent={true}
+                size={32}
+              />
             </div>
             <span className="text-muted-foreground text-xs max-w-[3rem] truncate text-center">
               {displayAgentName}

@@ -18,6 +18,7 @@ import { getBackendMemberId } from "@/lib/user-utils";
 import { useUserStatus } from "@/hooks/use-user-status";
 import { cn } from "@/lib/utils";
 import { CheckCircleFillIcon, ChevronDownIcon, BotIcon, UserIcon } from "./icons";
+import { UnifiedAvatar } from "./unified-avatar";
 
 export function ModelSelector({
   session,
@@ -129,17 +130,13 @@ export function ModelSelector({
           variant="outline"
         >
           {selectedChatModel && (
-            <div
-              className="mr-2 flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
-              style={{
-                color: "#3B82F6",
-              }}
-            >
-              {selectedChatModel.avatar.isAgent ? (
-                <BotIcon variant={selectedChatModel.avatar.iconVariant} />
-              ) : (
-                <UserIcon variant={selectedChatModel.avatar.iconVariant} />
-              )}
+            <div className="mr-2 shrink-0">
+              <UnifiedAvatar
+                name={selectedChatModel.name}
+                id={selectedChatModel.id}
+                isAgent={selectedChatModel.avatar.isAgent}
+                size={5}
+              />
             </div>
           )}
           {selectedChatModel?.name}
@@ -177,14 +174,12 @@ export function ModelSelector({
                       type="button"
                     >
                       <div className="flex items-center gap-2">
-                        <div
-                          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
-                          style={{
-                            color: "#3B82F6",
-                          }}
-                        >
-                          <BotIcon variant={chatModel.avatar.iconVariant} />
-                        </div>
+                        <UnifiedAvatar
+                          name={chatModel.name}
+                          id={chatModel.id}
+                          isAgent={true}
+                          size={6}
+                        />
                         <div className="flex flex-col items-start gap-1">
                           <div className="text-sm sm:text-base">{chatModel.name}</div>
                           {chatModel.description && (
@@ -233,14 +228,14 @@ export function ModelSelector({
                       type="button"
                     >
                       <div className="flex items-center gap-2">
-                        <div
-                          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
-                          style={{
-                            color: "#3B82F6",
-                          }}
-                        >
-                          <UserIcon variant={chatModel.avatar.iconVariant} />
-                        </div>
+                        <UnifiedAvatar
+                          name={chatModel.name}
+                          id={chatModel.id}
+                          isAgent={false}
+                          size={6}
+                          showStatus={true}
+                          isOnline={chatModel.isOnline}
+                        />
                         <div className="flex flex-col items-start gap-1">
                           <div className="flex items-center gap-2">
                             <div className="text-sm sm:text-base">{chatModel.name}</div>

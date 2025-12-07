@@ -64,17 +64,17 @@ export function VisibilitySelector({
       <DropdownMenuTrigger
         asChild
         className={cn(
-          "w-fit data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+          "w-fit data-[state=open]:bg-accent data-[state=open]:text-accent-foreground shrink-0",
           className
         )}
       >
         <Button
-          className="hidden h-8 md:flex md:h-fit md:px-2"
+          className="h-8 px-2 shrink-0"
           data-testid="visibility-selector"
           variant="outline"
         >
           {selectedVisibility?.icon}
-          <span className="md:sr-only">{selectedVisibility?.label}</span>
+          <span className="sr-only">{selectedVisibility?.label}</span>
           <ChevronDownIcon />
         </Button>
       </DropdownMenuTrigger>

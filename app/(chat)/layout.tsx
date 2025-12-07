@@ -3,10 +3,15 @@ import { unstable_noStore as noStore } from "next/cache";
 import Script from "next/script";
 import { Suspense } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
+import { LeftSidebar } from "@/components/left-sidebar";
+import { RightFixedPanel } from "@/components/right-fixed-panel";
+import { RightSidebar } from "@/components/right-sidebar";
 import { DataStreamProvider } from "@/components/data-stream-provider";
 import { WebSocketMessageProvider } from "@/components/websocket-message-provider";
+import { SessionTimeoutProvider } from "@/components/session-timeout-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { auth } from "../(auth)/auth";
+import { RightSidebarProvider } from "@/components/right-sidebar-provider";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -17,9 +22,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       />
       <DataStreamProvider>
         <WebSocketMessageProvider>
+          <SessionTimeoutProvider>
           <Suspense fallback={<div className="flex h-dvh" />}>
             <SidebarWrapper>{children}</SidebarWrapper>
           </Suspense>
+          </SessionTimeoutProvider>
         </WebSocketMessageProvider>
       </DataStreamProvider>
     </>
@@ -62,8 +69,13 @@ async function SidebarWrapper({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarProvider defaultOpen={!isCollapsed}>
+      <RightSidebarProvider>
+        <LeftSidebar />
       <AppSidebar user={session?.user} />
       <SidebarInset>{children}</SidebarInset>
+        <RightFixedPanel />
+        <RightSidebar user={session?.user} />
+      </RightSidebarProvider>
     </SidebarProvider>
   );
 }

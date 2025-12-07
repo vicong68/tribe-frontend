@@ -6,13 +6,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * SSE 消息类型
  */
 export interface SSEMessage {
-  message_type: "message" | "message_file" | "file" | "file_progress" | "heartbeat";
+  message_type: "message" | "message_file" | "file" | "file_progress" | "heartbeat" | "user_status_update" | "friend_added" | "friend_removed" | "friend_request" | "friend_accepted";
   content: string;
   sender_id: string;
   sender_name: string;
   receiver_id: string;
   receiver_name: string;
-  communication_type: "user_agent" | "user_user" | "agent_agent" | "file_progress" | "heartbeat";
+  communication_type: "user_agent" | "user_user" | "agent_agent" | "file_progress" | "heartbeat" | "system_broadcast" | "notification";
   file_attachment?: any;
   session_id?: string;
   timestamp?: number;
@@ -189,6 +189,69 @@ export function useSSEMessages(userId: string | null) {
             return;
           }
 
+          // 处理系统广播消息（用户状态更新）
+          if (data.communication_type === "system_broadcast" && data.message_type === "user_status_update") {
+            try {
+              const statusData = JSON.parse(data.content);
+              // 触发全局事件，通知所有组件更新用户状态
+              window.dispatchEvent(new CustomEvent("sse_user_status_update", {
+                detail: {
+                  member_id: statusData.member_id,
+                  is_online: statusData.is_online,
+                },
+              }));
+            } catch (error) {
+              console.error("[SSE] 解析用户状态更新失败:", error);
+            }
+            return;
+          }
+
+          // 处理通知消息（好友相关、好友请求等）
+          if (data.communication_type === "notification") {
+            const message: SSEMessage = {
+              message_type: data.message_type,
+              content: data.content,
+              sender_id: data.sender_id,
+              sender_name: data.sender_name,
+              receiver_id: data.receiver_id,
+              receiver_name: data.receiver_name,
+              communication_type: data.communication_type,
+              file_attachment: data.file_attachment,
+              session_id: data.session_id,
+              timestamp: data.timestamp,
+              created_at: data.created_at,
+            };
+
+            // 处理好友相关通知
+            if (message.message_type === "friend_added" || message.message_type === "friend_removed") {
+              // 触发全局事件，通知好友列表刷新
+              window.dispatchEvent(new CustomEvent("sse_friend_update", {
+                detail: {
+                  type: message.message_type,
+                  data: message.content ? JSON.parse(message.content) : null,
+                },
+              }));
+            } else if (message.message_type === "friend_request" || message.message_type === "friend_accepted") {
+              // 触发全局事件，通知好友请求更新
+              window.dispatchEvent(new CustomEvent("sse_friend_request_update", {
+                detail: {
+                  type: message.message_type,
+                  data: message.content ? JSON.parse(message.content) : null,
+                },
+              }));
+            }
+
+            // 触发消息处理器
+            messageHandlersRef.current.forEach((handler) => {
+              try {
+                handler(message);
+              } catch (error) {
+                console.error("[SSE] 消息处理器错误:", error);
+              }
+            });
+            return;
+          }
+
           // 处理用户-用户消息
           if (data.communication_type === "user_user" && data.message_type) {
             const message: SSEMessage = {
@@ -207,22 +270,6 @@ export function useSSEMessages(userId: string | null) {
 
             // 添加到消息列表
             setMessages((prev) => [...prev, message]);
-
-            // 处理用户状态更新（广播消息）
-            if (message.message_type === "user_status_update" && message.communication_type === "system_broadcast") {
-              try {
-                const statusData = JSON.parse(message.content);
-                // 触发全局事件，通知所有组件更新用户状态
-                window.dispatchEvent(new CustomEvent("sse_user_status_update", {
-                  detail: {
-                    member_id: statusData.member_id,
-                    is_online: statusData.is_online,
-                  },
-                }));
-              } catch (error) {
-                console.error("[SSE] 解析用户状态更新失败:", error);
-              }
-            }
 
             // 触发消息处理器
             messageHandlersRef.current.forEach((handler) => {

@@ -19,6 +19,7 @@ type MessagesProps = {
   isReadonly: boolean;
   isArtifactVisible: boolean;
   selectedModelId: string;
+  sendMessage?: (message: ChatMessage) => void;
 };
 
 function PureMessages({
@@ -30,6 +31,7 @@ function PureMessages({
   regenerate,
   isReadonly,
   selectedModelId,
+  sendMessage,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -140,6 +142,7 @@ function PureMessages({
                 }
                 selectedModelId={selectedModelId}
                 setMessages={setMessages}
+                sendMessage={sendMessage}
                 vote={
                   votes
                     ? votes.find((vote) => vote.messageId === message.id)

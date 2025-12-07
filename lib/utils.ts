@@ -26,26 +26,93 @@ export const fetcher = async (url: string) => {
   return response.json();
 };
 
+/**
+ * 带错误处理和重试机制的fetch函数（优化：指数退避重试）
+ * 符合用户-Agent交互优化方案：请求重试机制
+ */
 export async function fetchWithErrorHandlers(
   input: RequestInfo | URL,
   init?: RequestInit,
-) {
-  try {
-    const response = await fetch(input, init);
-
-    if (!response.ok) {
-      const { code, cause } = await response.json();
-      throw new ChatSDKError(code as ErrorCode, cause);
-    }
-
-    return response;
-  } catch (error: unknown) {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      throw new ChatSDKError('offline:chat');
-    }
-
-    throw error;
+  retryConfig?: {
+    maxRetries?: number;
+    retryDelay?: number;
+    retryableStatuses?: number[];
   }
+) {
+  const maxRetries = retryConfig?.maxRetries ?? 3;
+  const baseDelay = retryConfig?.retryDelay ?? 1000; // 1秒
+  const retryableStatuses = retryConfig?.retryableStatuses ?? [408, 429, 500, 502, 503, 504];
+  
+  let lastError: unknown;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(input, init);
+
+      if (!response.ok) {
+        // 检查是否可重试
+        if (attempt < maxRetries && retryableStatuses.includes(response.status)) {
+          // 指数退避：1s, 2s, 4s, 8s
+          const delay = baseDelay * Math.pow(2, attempt);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue; // 重试
+        }
+        
+        // ✅ 修复：安全地解析错误响应，处理非JSON响应
+        let errorData: { code?: string; cause?: string; message?: string; detail?: string } = {};
+        try {
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            errorData = await response.json();
+          } else {
+            const text = await response.text();
+            errorData = { 
+              message: text || `${response.status} ${response.statusText}`,
+              detail: `后端返回非JSON响应: ${response.status} ${response.statusText}`
+            };
+          }
+        } catch (parseError) {
+          // 如果解析失败，使用状态码和状态文本
+          errorData = {
+            message: `${response.status} ${response.statusText}`,
+            detail: "无法解析后端错误响应"
+          };
+        }
+        
+        const errorCode = (errorData.code || "offline:chat") as ErrorCode;
+        const errorMessage = errorData.cause || errorData.message || errorData.detail || "请求失败";
+        throw new ChatSDKError(errorCode, errorMessage);
+      }
+
+      return response;
+    } catch (error: unknown) {
+      lastError = error;
+      
+      // 如果是 ChatSDKError，直接抛出（不需要重试）
+      if (error instanceof ChatSDKError) {
+        throw error;
+      }
+      
+      // 网络错误且未达到最大重试次数时重试
+      if (attempt < maxRetries && error instanceof TypeError && error.message.includes('fetch')) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue; // 重试
+      }
+      
+      // 检查离线状态
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        throw new ChatSDKError('offline:chat');
+      }
+      
+      // 最后一次尝试失败，抛出错误
+      if (attempt === maxRetries) {
+        throw error;
+      }
+    }
+  }
+  
+  throw lastError;
 }
 
 export function getLocalStorage(key: string) {

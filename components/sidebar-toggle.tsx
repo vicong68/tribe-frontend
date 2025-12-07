@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 
-import { type SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
+import { useSidebar } from "@/components/ui/sidebar";
 import {
   Tooltip,
   TooltipContent,
@@ -10,17 +10,21 @@ import { cn } from "@/lib/utils";
 import { SidebarLeftIcon } from "./icons";
 import { Button } from "./ui/button";
 
-export function SidebarToggle({
+/**
+ * 左侧边栏切换按钮
+ * 专门用于控制用户面板（左侧可折叠边栏）的展开/折叠
+ */
+export function LeftSidebarToggle({
   className,
-}: ComponentProps<typeof SidebarTrigger>) {
-  const { toggleSidebar } = useSidebar();
+}: ComponentProps<"button">) {
+  const { toggleSidebar, state } = useSidebar();
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
           className={cn("h-8 px-2 md:h-fit md:px-2", className)}
-          data-testid="sidebar-toggle-button"
+          data-testid="left-sidebar-toggle-button"
           onClick={toggleSidebar}
           variant="outline"
         >
@@ -28,8 +32,12 @@ export function SidebarToggle({
         </Button>
       </TooltipTrigger>
       <TooltipContent align="start" className="hidden md:block">
-        Toggle Sidebar
+        {state === "expanded" ? "折叠左侧面板" : "展开左侧面板"}
       </TooltipContent>
     </Tooltip>
   );
 }
+
+// 保持向后兼容，但标记为已弃用
+/** @deprecated 使用 LeftSidebarToggle 代替 */
+export const SidebarToggle = LeftSidebarToggle;

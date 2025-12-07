@@ -35,7 +35,7 @@ const PureChatItem = ({
   chat: Chat;
   isActive: boolean;
   onDelete: (chatId: string) => void;
-  setOpenMobile: (open: boolean) => void;
+  setOpenMobile?: (open: boolean) => void; // 改为可选参数，确保右侧对话栏独立
 }) => {
   const { visibilityType, setVisibilityType } = useChatVisibility({
     chatId: chat.id,
@@ -45,7 +45,7 @@ const PureChatItem = ({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isActive}>
-        <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile(false)}>
+        <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile?.(false)}>
           <span>{chat.title}</span>
         </Link>
       </SidebarMenuButton>

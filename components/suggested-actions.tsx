@@ -18,7 +18,7 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
     "使用 Next.js 有哪些优势？",
     "编写代码演示 Dijkstra 算法",
     "帮我写一篇关于硅谷的文章",
-    "旧金山的天气怎么样？",
+    "北京的天气怎么样？",
   ];
 
   return (

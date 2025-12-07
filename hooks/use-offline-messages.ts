@@ -65,8 +65,9 @@ export function useOfflineMessages({
     // 异步拉取离线消息
     const fetchOfflineMessages = async () => {
       try {
+        // 使用前端 API 路由代理，避免跨域问题
         const response = await fetch(
-          `${BACKEND_URL}/api/chat/offline_messages?user_id=${encodeURIComponent(userId)}&timeout=5&wait_interval=1`,
+          `/api/sse/offline_messages?user_id=${encodeURIComponent(userId)}&timeout=5&wait_interval=1`,
           {
             method: "GET",
             headers: {
@@ -77,9 +78,14 @@ export function useOfflineMessages({
         );
 
         if (!response.ok) {
-          // 静默处理错误，不影响用户体验
+          // 记录错误信息，便于调试
           if (process.env.NODE_ENV === "development") {
-            console.warn("[OfflineMessages] 拉取离线消息失败:", response.status);
+            const errorText = await response.text().catch(() => "");
+            console.warn("[OfflineMessages] 拉取离线消息失败:", response.status, errorText);
+          }
+          // 即使失败也触发回调，确保用户列表能拉取
+          if (onOfflineMessagesFetched) {
+            onOfflineMessagesFetched();
           }
           return;
         }
@@ -87,7 +93,14 @@ export function useOfflineMessages({
         const data = (await response.json()) as OfflineMessagesResponse;
         const offlineMessages = data.offline_messages || [];
 
+        // 离线消息拉取完成，无论是否有消息都触发回调
+        // 这样即使没有离线消息，也能确保用户列表和状态拉取
+        if (onOfflineMessagesFetched) {
+          onOfflineMessagesFetched();
+        }
+
         if (offlineMessages.length === 0) {
+          // 没有离线消息，直接返回（功能已完成，可以关闭）
           return;
         }
 
@@ -130,7 +143,8 @@ export function useOfflineMessages({
         // 通知调用者处理消息
         onMessages(chatMessages);
         
-        // 离线消息拉取完成，触发用户列表和状态拉取
+        // 离线消息拉取完成（已在上面触发，这里确保触发）
+        // 注意：离线消息拉取是一次性的，完成后功能可以关闭
         if (onOfflineMessagesFetched) {
           onOfflineMessagesFetched();
         }

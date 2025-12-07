@@ -45,10 +45,12 @@ export async function GET(
     });
 
     if (!backendResponse.ok) {
+      const errorText = await backendResponse.text().catch(() => "无法读取错误响应");
       return new Response(
         JSON.stringify({
           error: "后端服务错误",
           code: backendResponse.status,
+          message: errorText || backendResponse.statusText,
         }),
         {
           status: backendResponse.status,
@@ -67,11 +69,14 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error("[SSE Proxy] 代理错误:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("[SSE Proxy] 代理错误:", errorMessage);
+    
     return new Response(
       JSON.stringify({
         error: "代理请求失败",
         code: 500,
+        message: errorMessage,
       }),
       {
         status: 500,

@@ -46,6 +46,7 @@ import {
   UserIcon,
   StopIcon,
 } from "./icons";
+import { UnifiedAvatar } from "./unified-avatar";
 import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
@@ -608,17 +609,15 @@ function PureModelSelectorCompact({
       <Trigger asChild>
         <Button className="h-8 px-2" variant="ghost">
           {selectedModel && (
-            <div
-              className="mr-1.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
-              style={{
-                color: "#3B82F6",
-              }}
-            >
-              {selectedModel.avatar.isAgent ? (
-                <BotIcon variant={selectedModel.avatar.iconVariant} />
-              ) : (
-                <UserIcon variant={selectedModel.avatar.iconVariant} />
-              )}
+            <div className="mr-1.5 shrink-0">
+              <UnifiedAvatar
+                name={selectedModel.name}
+                id={selectedModel.id}
+                isAgent={selectedModel.avatar.isAgent}
+                size={5}
+                showStatus={selectedModel.type === "user"}
+                isOnline={selectedModel.isOnline}
+              />
             </div>
           )}
           <span className="hidden font-medium text-xs sm:block">
@@ -634,14 +633,12 @@ function PureModelSelectorCompact({
             .map((model) => (
               <SelectItem key={model.id} value={model.name}>
                 <div className="flex items-center gap-2">
-                  <div
-                    className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
-                    style={{
-                      color: "#3B82F6",
-                    }}
-                  >
-                    <BotIcon variant={model.avatar.iconVariant} />
-                  </div>
+                  <UnifiedAvatar
+                    name={model.name}
+                    id={model.id}
+                    isAgent={true}
+                    size={5}
+                  />
                   <div className="flex flex-col">
                     <div className="truncate font-medium text-xs">{model.name}</div>
                     <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
@@ -659,20 +656,17 @@ function PureModelSelectorCompact({
                 .map((model) => (
                   <SelectItem key={model.id} value={model.name}>
                     <div className="flex items-center gap-2">
-                      <div
-                        className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white border border-blue-500"
-                        style={{
-                          color: "#3B82F6",
-                        }}
-                      >
-                        <UserIcon variant={model.avatar.iconVariant} />
-                      </div>
+                      <UnifiedAvatar
+                        name={model.name}
+                        id={model.id}
+                        isAgent={false}
+                        size={5}
+                        showStatus={true}
+                        isOnline={model.isOnline}
+                      />
                       <div className="flex flex-col">
                         <div className="flex items-center gap-2">
                           <div className="truncate font-medium text-xs">{model.name}</div>
-                          {model.isOnline && (
-                            <span className="size-2 shrink-0 rounded-full bg-green-500" />
-                          )}
                         </div>
                         <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
                           用户
