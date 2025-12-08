@@ -97,21 +97,12 @@ export function Chat({
   } = useStreamChatWithRetry<ChatMessage>({
     id,
     messages: initialMessages,
-    // 优化流式响应性能：使用 50ms throttle 平衡流畅度和性能
-    // 参考 Vercel AI SDK 最佳实践：https://sdk.vercel.ai/docs/reference/ai-sdk-ui/use-chat
+    // 流式配置：固定 throttle 50ms，与后端基础配置匹配
     experimental_throttle: 50,
     generateId: () => {
-      // 如果有预生成的 ID，使用它；否则生成新的并存储到 ref 中
-      // 注意：generateId 可能在 prepareSendMessagesRequest 之前被调用
-      // 所以如果 ref 中没有 ID，我们在这里生成并存储，确保 prepareSendMessagesRequest 可以使用
-      if (expectedAssistantMessageIdRef.current) {
-        const id = expectedAssistantMessageIdRef.current;
-        expectedAssistantMessageIdRef.current = null;
-        return id;
-      }
-      const newId = generateUUID();
-      expectedAssistantMessageIdRef.current = newId;
-      return newId;
+      // 为前端新增消息生成独立的 UUID（用户与助手各自唯一）
+      // 不再复用 expectedAssistantMessageIdRef，避免用户消息占用助手预期 ID
+      return generateUUID();
     },
     transport: new DefaultChatTransport({
       api: "/api/chat",
@@ -147,18 +138,11 @@ export function Chat({
       }
     },
     onFinish: () => {
-      // 流式响应完成
-      // 注意：消息保存已在服务器端（/api/chat/route.ts）处理
-      // 符合 AI SDK 最佳实践：在服务器端保存消息，客户端只负责显示
-      // 参考: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot/message-persistence
-      // 
-      // 客户端保存只作为兜底机制，在页面加载时通过 useMessagePersistence 检查恢复
-      
-      // 刷新聊天历史列表（使用 startTransition 优化性能）
+      // 流式响应完成：标记状态为 idle
+      // 消息保存通过 useEffect 监听 status 变化来处理，确保使用最新的 messages 状态
       startTransition(() => {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
       });
-      // 更新对话状态为 idle
       conversationManager.updateStatus("idle");
     },
     onError: (error) => {
@@ -199,6 +183,12 @@ export function Chat({
     chatId: id,
     messages,
   });
+  
+  // 保存 saveAssistantMessages 到 ref，以便在 onFinish 中使用（避免闭包问题）
+  const saveAssistantMessagesRef = useRef(saveAssistantMessages);
+  useEffect(() => {
+    saveAssistantMessagesRef.current = saveAssistantMessages;
+  }, [saveAssistantMessages]);
 
   // 获取 SSE 消息上下文（用于接收用户-用户消息）
   const { onMessage: onSSEMessage, isConnected: sseConnected } = useSSEMessageContext();
@@ -276,6 +266,36 @@ export function Chat({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // 流式响应完成后保存 assistant 消息
+  // 使用 useEffect 监听 status 变化，确保使用最新的 messages 状态
+  // 符合 Vercel AI SDK 最佳实践：在流式响应完成后保存消息
+  // 记录上一次的流式状态，用于检测 streaming 结束
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const currentStatus = status;
+    // 当状态从 "streaming" 变为非 "streaming" 时，保存 assistant 消息
+    if (prevStatusRef.current === "streaming" && currentStatus !== "streaming") {
+      // 使用最新的 messages 状态，而不是 ref
+      const assistantMessages = messages.filter((msg) => msg.role === "assistant");
+      
+      if (assistantMessages.length > 0) {
+        // 延迟一小段时间，确保 AI SDK 已完全更新 messages 状态
+        // 使用 setTimeout 确保在下一个事件循环中执行
+        const timeoutId = setTimeout(() => {
+          saveAssistantMessagesRef.current(assistantMessages).catch((error) => {
+            if (process.env.NODE_ENV === "development") {
+              console.error("[Chat] Failed to save messages on finish:", error);
+            }
+          });
+        }, 100);
+        
+        return () => clearTimeout(timeoutId);
+      }
+    }
+    
+    prevStatusRef.current = currentStatus;
+  }, [status, messages]);
 
   // 处理 SSE 中的用户-用户消息
   useEffect(() => {
@@ -363,12 +383,9 @@ export function Chat({
   }, [onSSEMessage, messages, setMessages, saveAssistantMessages]);
 
 
-  // ✅ 最佳实践：处理 data-appendMessage 事件，确保消息同步
-  // 参考：https://sdk.vercel.ai/docs/ai-sdk-ui/chatbot/message-persistence
-  // 核心原则：
-  // 1. 服务器端保存消息（后端已在流式开始前保存 ✅）
-  // 2. 通过 data-appendMessage 同步消息状态（后端已在流式开始前发送 ✅）
-  // 3. 确保消息在流式开始前已在 messages 状态中
+  // 处理 data-appendMessage 事件：仅更新 assistant 消息的 metadata
+  // 注意：用户消息由 useChat 自动管理，不需要通过 data-appendMessage 处理
+  // Assistant 消息的内容由 AI SDK 通过流式响应自动更新，这里只更新 metadata
   const { dataStream } = useDataStream();
   const processedMetadataRef = useRef<Set<string>>(new Set());
   
@@ -379,61 +396,50 @@ export function Chat({
 
     appendEvents.forEach((dataPart) => {
       try {
-        const messageWithMetadata = JSON.parse(dataPart.data) as ChatMessage;
-        const eventKey = `${messageWithMetadata.id}-${messageWithMetadata.role}`;
-        if (processedMetadataRef.current.has(eventKey)) return;
+        const messageWithMetadata: ChatMessage = typeof dataPart.data === "string"
+          ? JSON.parse(dataPart.data)
+          : dataPart.data;
         
-        requestAnimationFrame(() => {
-          setMessages((prev) => {
-            // 查找消息是否存在（通过 ID 或 originalMessageId 匹配）
-            const targetIndex = prev.findIndex(
-              m => m.id === messageWithMetadata.id || 
-                   (m.metadata?.originalMessageId && m.metadata.originalMessageId === messageWithMetadata.id)
-            );
-            
-            if (targetIndex >= 0) {
-              // 消息已存在：更新 metadata（保持完整性）
-              const updated = [...prev];
-              updated[targetIndex] = {
-                ...messageWithMetadata,
-                metadata: {
-                  ...prev[targetIndex].metadata,
-                  ...messageWithMetadata.metadata,
-                  createdAt: prev[targetIndex].metadata?.createdAt || 
-                             messageWithMetadata.metadata?.createdAt || 
-                             new Date().toISOString(),
-                },
-              };
-              processedMetadataRef.current.add(eventKey);
-              return updated;
-            }
-            
-            // ✅ 关键优化：消息不存在时，添加到列表
-            // 这确保了用户消息在流式开始前已在 messages 状态中
-            // 符合最佳实践：通过 data-appendMessage 同步新消息
-            const lastMsg = prev[prev.length - 1];
-            const isStreaming = status === "streaming";
-            
-            if (isStreaming && lastMsg?.role === "assistant") {
-              // 流式已开始：将用户消息插入到 assistant 消息之前（保证顺序）
-              const updated = [...prev.slice(0, -1), messageWithMetadata, lastMsg];
-              processedMetadataRef.current.add(eventKey);
-              return updated;
-            } else {
-              // 流式未开始或没有 assistant 消息：追加到末尾
-              processedMetadataRef.current.add(eventKey);
-              return [...prev, messageWithMetadata];
-            }
-          });
+        // 只处理 assistant 消息的 metadata 更新
+        if (messageWithMetadata.role !== "assistant") {
+          return;
+        }
+        
+        const eventKey = `${messageWithMetadata.id}-metadata`;
+        if (processedMetadataRef.current.has(eventKey)) {
+          return;
+        }
+        
+        setMessages((prev) => {
+          const targetIndex = prev.findIndex(m => m.id === messageWithMetadata.id);
+          
+          if (targetIndex >= 0) {
+            // 只更新 metadata，不更新 parts（由 AI SDK 管理）
+            const updated = [...prev];
+            updated[targetIndex] = {
+              ...prev[targetIndex],
+              metadata: {
+                ...prev[targetIndex].metadata,
+                ...messageWithMetadata.metadata,
+                createdAt: prev[targetIndex].metadata?.createdAt || 
+                           messageWithMetadata.metadata?.createdAt || 
+                           new Date().toISOString(),
+              },
+            };
+            processedMetadataRef.current.add(eventKey);
+            return updated;
+          }
+          
+          // 如果消息不存在，忽略（消息应该由 AI SDK 自动创建）
+          return prev;
         });
       } catch (error) {
-        // 静默处理错误，避免影响流式响应
         if (process.env.NODE_ENV === "development") {
           console.error("[Chat] Failed to process data-appendMessage:", error);
         }
       }
     });
-  }, [dataStream, status, setMessages]);
+  }, [dataStream, setMessages]);
 
   // 直接使用原始 sendMessage，固化逻辑已在 prepareSendMessagesRequest 中处理
   const sendMessage = originalSendMessage;

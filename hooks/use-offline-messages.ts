@@ -65,7 +65,7 @@ export function useOfflineMessages({
     // 异步拉取离线消息
     const fetchOfflineMessages = async () => {
       try {
-        // 使用前端 API 路由代理，避免跨域问题
+        // 使用前端 API 路由代理
         const response = await fetch(
           `/api/sse/offline_messages?user_id=${encodeURIComponent(userId)}&timeout=5&wait_interval=1`,
           {

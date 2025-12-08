@@ -176,16 +176,85 @@ export function sanitizeText(text: string) {
 export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   // 标准格式转换：直接转换数据库消息为 UI 消息格式
   // 所有消息都应该有完整的 metadata（无 metadata 的消息已在数据库层面清理）
-  return messages.map((message) => ({
-    id: message.id,
-    role: message.role as 'user' | 'assistant' | 'system',
-    parts: message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[],
-    metadata: {
-      createdAt: formatISO(message.createdAt),
-      // 合并数据库中的 metadata（所有消息都应该有完整的 metadata）
-      ...(message.metadata || {}),
-    },
-  }));
+  return messages.map((message) => {
+    // 确保 parts 是数组，如果为空或无效则使用空数组
+    let parts = message.parts;
+    if (!Array.isArray(parts)) {
+      // 如果 parts 不是数组，尝试解析（可能是 JSON 字符串）
+      try {
+        if (typeof parts === "string") {
+          parts = JSON.parse(parts);
+        } else {
+          parts = [];
+        }
+      } catch {
+        parts = [];
+      }
+    }
+    
+    // ✅ 修复：清理错误格式的 parts
+    // 如果 parts 包含 {"type":"data-appendMessage","data":"..."} 这种格式，
+    // 尝试从 data 字段中解析出实际的消息内容
+    // 注意：只提取 assistant 消息的 parts，忽略 user 消息的内容
+    const cleanedParts: any[] = [];
+    for (const part of parts) {
+      if (part && typeof part === 'object') {
+        // 检查是否是错误格式的 data-appendMessage 事件
+        if (part.type === "data-appendMessage" && part.data) {
+          try {
+            // 尝试解析 data 字段（可能是 JSON 字符串）
+            const dataContent = typeof part.data === "string" ? JSON.parse(part.data) : part.data;
+            
+            // ✅ 关键修复：只提取 assistant 消息的 parts，忽略 user 消息
+            // 如果 data 是完整的消息对象，且 role 是 assistant，才提取其 parts
+            if (dataContent && dataContent.role === "assistant" && Array.isArray(dataContent.parts)) {
+              // 只提取 assistant 消息的 parts
+              cleanedParts.push(...dataContent.parts);
+            } else if (dataContent && dataContent.role === "user") {
+              // 如果是 user 消息，跳过（不应该出现在 assistant 消息的 parts 中）
+              if (process.env.NODE_ENV === "development") {
+                console.warn("[convertToUIMessages] Skipping user message in assistant parts:", dataContent.id);
+              }
+              // 不添加任何内容，保持 cleanedParts 为空
+            } else if (dataContent && Array.isArray(dataContent.parts) && message.role === "assistant") {
+              // 如果没有 role 字段，但当前消息是 assistant，且 data 有 parts，也尝试提取
+              // 但需要验证 parts 是否有效
+              const validParts = dataContent.parts.filter((p: any) => 
+                p && typeof p === 'object' && 
+                p.type !== "data-appendMessage" &&
+                (p.type === "text" || p.type === "file" || (p.type !== "text" && p.type !== "file"))
+              );
+              if (validParts.length > 0) {
+                cleanedParts.push(...validParts);
+              }
+            }
+          } catch (e) {
+            // 解析失败，跳过这个 part
+            if (process.env.NODE_ENV === "development") {
+              console.warn("[convertToUIMessages] Failed to parse data-appendMessage data:", e);
+            }
+          }
+        } else if (part.type !== "data-appendMessage") {
+          // 正常的 part 格式，直接使用（排除 data-appendMessage 类型）
+          cleanedParts.push(part);
+        }
+      }
+    }
+    
+    // 使用清理后的 parts，如果为空则使用空数组（不保留错误格式的 parts）
+    const finalParts = cleanedParts.length > 0 ? cleanedParts : [];
+    
+    return {
+      id: message.id,
+      role: message.role as 'user' | 'assistant' | 'system',
+      parts: finalParts as UIMessagePart<CustomUIDataTypes, ChatTools>[],
+      metadata: {
+        createdAt: formatISO(message.createdAt),
+        // 合并数据库中的 metadata（所有消息都应该有完整的 metadata）
+        ...(message.metadata || {}),
+      },
+    };
+  });
 }
 
 /**

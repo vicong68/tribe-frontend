@@ -54,6 +54,9 @@ export async function POST(request: Request) {
     );
     if (invalidMessages.length > 0) {
       console.warn("[messages/route] Invalid message format detected:", invalidMessages.length);
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[messages/route] Invalid messages:", invalidMessages);
+      }
     }
 
     // 获取数据库中已有的消息 ID，避免重复保存
@@ -62,14 +65,41 @@ export async function POST(request: Request) {
 
     // 只保存新的 assistant 消息（用户消息已经在发送前保存）
     // 符合 AI SDK 规范：只持久化 assistant 消息
-    const assistantMessages = messages.filter(
-      (msg) => 
-        msg.role === "assistant" && 
-        !existingMessageIds.has(msg.id) &&
-        msg.id && 
-        msg.parts && 
-        Array.isArray(msg.parts)
-    );
+    // 确保消息有有效的 parts（非空数组且有实际内容）
+    const assistantMessages = messages.filter((msg) => {
+      if (msg.role !== "assistant") return false;
+      if (existingMessageIds.has(msg.id)) return false;
+      if (!msg.id) return false;
+      if (!msg.parts || !Array.isArray(msg.parts)) return false;
+      if (msg.parts.length === 0) return false;
+
+      // 检查是否有有效内容（文本、文件或其他类型）
+      // 排除 "data-appendMessage" 类型，这是错误格式
+      let hasValidContent = false;
+      let hasDataAppend = false;
+      for (const p of msg.parts as any[]) {
+        if (!p || typeof p !== "object") continue;
+        if (p.type === "data-appendMessage") {
+          hasDataAppend = true;
+          continue;
+        }
+        if (p.type === "text" && p.text && p.text.trim().length > 0) {
+          hasValidContent = true;
+          break;
+        }
+        if (p.type === "file") {
+          hasValidContent = true;
+          break;
+        }
+        if (p.type !== "text" && p.type !== "file") {
+          hasValidContent = true;
+          break;
+        }
+      }
+
+      if (!hasValidContent) return false;
+      return true;
+    });
 
     if (assistantMessages.length === 0) {
       return Response.json({ 

@@ -88,7 +88,7 @@ export function useSSEMessages(userId: string | null) {
 
   /**
    * 获取 SSE URL
-   * 使用相对路径，通过 Next.js API 路由代理，避免跨域问题
+   * 使用相对路径，通过 Next.js API 路由代理
    */
   const getSSEUrl = useCallback(() => {
     // 使用相对路径，通过 Next.js API 路由代理到后端

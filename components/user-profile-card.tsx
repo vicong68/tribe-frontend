@@ -42,11 +42,11 @@ export function UserProfileCard() {
     ? getBackendMemberId(session.user)
     : null;
 
-  // 获取用户资料
+  // 获取用户资料（通过前端 API 路由代理）
   const { data: profileData, isLoading, error } = useSWR<UserProfileResponse>(
     userId ? `/api/user/profile/${userId}` : null,
     async (url: string) => {
-      const response = await fetch(`${BACKEND_URL}${url}`);
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error("Failed to fetch user profile");
       }

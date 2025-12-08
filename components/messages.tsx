@@ -67,13 +67,14 @@ function PureMessages({
       
       // 检查是否有有效的文本内容
       const hasValidText = parts.some(
-        (p) => p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
+        (p) => p && typeof p === 'object' && p.type === "text" && (p as any).text && (p as any).text.trim().length > 0
       );
       // 检查是否有文件附件
-      const hasAttachments = parts.some((p) => p.type === "file");
+      const hasAttachments = parts.some((p) => p && typeof p === 'object' && p.type === "file");
       // 检查是否有其他有效内容（reasoning、tool 等）
+      // 注意：排除 "data-appendMessage" 类型，这是错误格式
       const hasOtherContent = parts.some(
-        (p) => p.type !== "text" && p.type !== "file"
+        (p) => p && typeof p === 'object' && p.type !== "text" && p.type !== "file" && p.type !== "data-appendMessage"
       );
       
       return hasValidText || hasAttachments || hasOtherContent;
@@ -127,18 +128,31 @@ function PureMessages({
         <div className="flex min-w-0 flex-col gap-4 py-4 md:gap-6">
           {uniqueMessages.length === 0 && <Greeting />}
 
-          {uniqueMessages.map((message, index) => (
+          {uniqueMessages.map((message, index) => {
+            // ✅ 关键修复：准确判断是否是流式回复消息，确保思考消息被正确替换
+            // 流式回复消息的特征：
+            // 1. 是最后一条消息（index === uniqueMessages.length - 1）
+            // 2. 状态是 streaming
+            // 3. 角色是 assistant
+            // 4. 没有有效内容或内容为空（流式刚开始时）
+            const isLastMessage = index === uniqueMessages.length - 1;
+            const isStreamingAssistant = status === "streaming" && 
+                                         isLastMessage && 
+                                         message.role === "assistant";
+            const hasValidContent = message.parts?.some(
+              (p: any) => p.type === "text" && p.text && p.text.trim().length > 0
+            ) || message.parts?.some((p: any) => p.type !== "text");
+            
+            return (
               <PreviewMessage
                 chatId={chatId}
-                isLoading={
-                  status === "streaming" && uniqueMessages.length - 1 === index
-                }
+                isLoading={isStreamingAssistant && !hasValidContent}
                 isReadonly={isReadonly}
                 key={message.id}
                 message={message}
                 regenerate={regenerate}
                 requiresScrollPadding={
-                  hasSentMessage && index === uniqueMessages.length - 1
+                  hasSentMessage && isLastMessage
                 }
                 selectedModelId={selectedModelId}
                 setMessages={setMessages}
@@ -149,10 +163,19 @@ function PureMessages({
                     : undefined
                 }
               />
-          ))}
+            );
+          })}
 
-          {/* 仅在等待agent回复时显示思考消息（不显示用户-用户通信的等待） */}
-          {status === "submitted" && !selectedModelId.startsWith("user::") && (
+          {/* ✅ 关键修复：仅在等待agent回复时显示思考消息，且确保流式回复消息已存在时不显示
+              思考消息的显示条件：
+              1. 状态是 submitted（等待回复）
+              2. 不是用户-用户通信
+              3. 最后一条消息不是 assistant 消息（避免与流式回复消息重复显示）
+          */}
+          {status === "submitted" && 
+           !selectedModelId.startsWith("user::") && 
+           uniqueMessages.length > 0 &&
+           uniqueMessages[uniqueMessages.length - 1]?.role !== "assistant" && (
             <ThinkingMessage 
               agentName={selectedModelId} 
               selectedModelId={selectedModelId}

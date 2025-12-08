@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { chat_id, message_id, message_content, message_role } = body;
+    const { chat_id, message_id, message_content, message_role, sender_name } = body;
 
     if (!chat_id || !message_id || !message_content) {
       return NextResponse.json(
@@ -110,6 +110,7 @@ export async function POST(request: NextRequest) {
         message_id,
         message_content,
         message_role: message_role || "user",
+        sender_name: sender_name || null, // 传递发送者名称
       }),
     });
 

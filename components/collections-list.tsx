@@ -1,7 +1,7 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import useSWR from "swr";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,6 +16,7 @@ interface CollectionItem {
   message_id: string;
   message_content: string;
   message_role: "user" | "assistant";
+  sender_name?: string | null; // 发送者名称（如：VIcOng、司仪等）
   created_at: string;
 }
 
@@ -24,13 +25,22 @@ interface CollectionItem {
  * 展示收藏的消息，按时间顺序紧凑列表
  */
 export function CollectionsList() {
+  const [mounted, setMounted] = useState(false);
   const { data: session } = useSession();
+  
+  // 防止 hydration 不匹配：确保服务器端和客户端初始渲染一致
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  
+  // ✅ 关键修复：所有 hooks 必须在条件返回之前调用，确保 hooks 调用顺序一致
+  // 这是 React Hooks 的规则：hooks 必须在每次渲染时以相同的顺序调用
   const isLoggedIn = session?.user?.type === "regular";
   const userId = isLoggedIn && session?.user ? getBackendMemberId(session.user) : null;
 
   // 获取收藏列表
   const { data: collections, isLoading, mutate } = useSWR<CollectionItem[]>(
-    userId ? "/api/collections" : null,
+    mounted && userId ? "/api/collections" : null, // 只在 mounted 且 userId 存在时请求
     async (url) => {
       const response = await fetch(url);
       if (!response.ok) {
@@ -59,6 +69,19 @@ export function CollectionsList() {
       return timeB - timeA;
     });
   }, [collections]);
+  
+  // ✅ 关键修复：条件返回必须在所有 hooks 调用之后
+  // 在服务器端和客户端初始渲染时，都返回相同的占位符，避免 hydration 不匹配
+  // 服务器端渲染时，mounted 为 false，返回占位符
+  // 客户端首次渲染时，mounted 仍为 false，保持与服务器端一致
+  // 客户端 hydration 完成后，mounted 变为 true，再渲染完整组件
+  if (!mounted) {
+    return (
+      <div className="text-sm text-muted-foreground text-center py-4">
+        请先登录以查看收藏
+      </div>
+    );
+  }
 
   if (!isLoggedIn || !userId) {
     return (
@@ -108,7 +131,8 @@ export function CollectionsList() {
                 "text-xs font-medium",
                 item.message_role === "user" ? "text-blue-600" : "text-green-600"
               )}>
-                {item.message_role === "user" ? "用户" : "智能体"}
+                {/* 显示具体名称，如果没有则显示默认值 */}
+                {item.sender_name || (item.message_role === "user" ? "用户" : "智能体")}
               </span>
               <span className="text-xs text-muted-foreground">
                 {format(new Date(item.created_at), "MM-dd HH:mm", { locale: zhCN })}

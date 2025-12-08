@@ -1,6 +1,6 @@
 /**
  * SSE 事件流代理路由
- * 通过 Next.js API 路由代理到后端，避免跨域问题
+ * 通过 Next.js API 路由代理到后端
  */
 import { NextRequest } from "next/server";
 import { auth } from "@/app/(auth)/auth";

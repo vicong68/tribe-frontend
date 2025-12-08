@@ -232,6 +232,17 @@ export function PureMessageActions({
       return;
     }
 
+    // 获取发送者名称（从metadata中获取，确保显示具体名称）
+    const metadata = message.metadata || {};
+    let senderName: string;
+    if (message.role === "user") {
+      // 用户消息：使用metadata中的senderName或从session获取
+      senderName = (metadata as any).senderName || session?.user?.email?.split("@")[0] || "用户";
+    } else {
+      // Assistant消息：优先使用metadata中的senderName
+      senderName = (metadata as any).senderName || (metadata as any).agentUsed || "智能体";
+    }
+
     try {
       const response = await fetch("/api/collections", {
         method: "POST",
@@ -241,6 +252,7 @@ export function PureMessageActions({
           message_id: message.id,
           message_content: textFromParts,
           message_role: message.role,
+          sender_name: senderName, // 传递发送者名称
         }),
       });
 
@@ -254,6 +266,50 @@ export function PureMessageActions({
     } catch (error) {
       toast.error("收藏失败，请稍后重试");
     }
+  };
+
+  const handleDelete = async () => {
+    if (!setMessages) {
+      toast.error("删除失败，请刷新页面后重试");
+      return;
+    }
+
+    const deletePromise = (async () => {
+      const response = await fetch(`/api/message/${message.id}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        let errorMessage = "删除失败，请稍后重试";
+        try {
+          const errorText = await response.text();
+          if (errorText) {
+            try {
+              const errorData = JSON.parse(errorText);
+              errorMessage = errorData.message || errorData.error || errorMessage;
+            } catch {
+              errorMessage = errorText || errorMessage;
+            }
+          }
+        } catch {
+          // 忽略解析错误，使用默认错误信息
+        }
+        throw new Error(errorMessage);
+      }
+
+      setMessages((prevMessages) =>
+        prevMessages.filter((currentMessage) => currentMessage.id !== message.id)
+      );
+      mutate(`/api/vote?chatId=${chatId}`);
+      return "已删除该消息";
+    })();
+
+    toast.promise(deletePromise, {
+      loading: "正在删除消息...",
+      success: (successMessage) => successMessage,
+      error: (error) =>
+        error instanceof Error ? error.message : "删除失败，请稍后重试",
+    });
   };
 
   // 统一编辑和复制操作（左右对称）
@@ -286,6 +342,17 @@ export function PureMessageActions({
         <CopyIcon />
       </Action>
         </>
+      )}
+
+      {/* 本地用户消息：补充复制功能（与左侧一致） */}
+      {isUser && (
+        <Action
+          className={actionButtonClass}
+          onClick={handleCopy}
+          tooltip="复制"
+        >
+          <CopyIcon />
+        </Action>
       )}
 
       {/* 分享按钮：所有消息都支持 */}
@@ -343,10 +410,7 @@ export function PureMessageActions({
           <DropdownMenuSeparator />
           <DropdownMenuItem 
             className="text-destructive"
-            onClick={() => {
-              // TODO: 实现删除功能
-              toast.info("删除功能待实现");
-            }}
+            onClick={handleDelete}
           >
             <TrashIcon />
             <span className="ml-2">删除</span>

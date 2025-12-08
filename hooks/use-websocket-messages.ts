@@ -274,8 +274,7 @@ export function useWebSocketMessages(userId: string | null) {
           console.error("[WS] 连接已关闭，可能的原因：");
           console.error("  1. 后端服务未运行");
           console.error("  2. WebSocket 路由不存在");
-          console.error("  3. CORS 配置问题");
-          console.error("  4. 网络连接问题");
+          console.error("  3. 网络连接问题");
         } else if (ws.readyState === WebSocket.CONNECTING) {
           console.error("[WS] 连接中，但发生错误");
         }
@@ -304,8 +303,7 @@ export function useWebSocketMessages(userId: string | null) {
           console.error("  4. 后端 WebSocket 路由未正确注册");
         } else if (event.code === 1008) {
           console.error("[WS] ❌ 策略违规 (1008)，可能的原因：");
-          console.error("  1. CORS 配置问题");
-          console.error("  2. Origin 未授权");
+          console.error("  1. Origin 未授权");
         } else if (event.code === 1000) {
           console.log("[WS] ✅ 正常关闭 (1000)");
         } else if (event.code === 1001) {

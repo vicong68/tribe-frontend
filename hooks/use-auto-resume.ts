@@ -81,7 +81,23 @@ export function useAutoResume({
     const dataPart = dataStream[0];
 
     if (dataPart.type === "data-appendMessage") {
-      const message = JSON.parse(dataPart.data) as ChatMessage;
+      // ✅ 最佳实践：dataPart.data 可能是 JSON 字符串或对象
+      // 兼容处理，避免 JSON 解析错误
+      let message: ChatMessage;
+      if (typeof dataPart.data === "string") {
+        try {
+          message = JSON.parse(dataPart.data) as ChatMessage;
+        } catch (error) {
+          // 如果解析失败，静默跳过
+          if (process.env.NODE_ENV === "development") {
+            console.error("[use-auto-resume] Failed to parse data-appendMessage data:", error);
+          }
+          return;
+        }
+      } else {
+        // 如果已经是对象，直接使用
+        message = dataPart.data as ChatMessage;
+      }
       
       // 检查消息是否已经存在（通过 ID 或 originalMessageId）
       // 如果存在，则更新而不是添加，避免重复

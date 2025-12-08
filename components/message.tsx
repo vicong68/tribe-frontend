@@ -169,14 +169,41 @@ const PurePreviewMessage = ({
   }
   
   // 使用缓存的metadata，避免重复访问
-  const receiverName = (metadata as any).receiverName;
   const communicationType = (metadata as any).communicationType;
   
-  // ✅ 修复 hydration 错误：优先使用 metadata 中固化的 senderId，确保服务器端和客户端一致
-  // 对于用户消息，metadata.senderId 在保存时已固化（backendMemberId）
-  // 对于 Assistant 消息，metadata.senderId 也已在保存时固化
-  // 这样避免依赖 session，确保服务器端和客户端计算相同的 avatarSeed
-  const avatarSeed = (metadata as any).senderId || senderName || "default";
+  // 获取接收方名称：优先使用 metadata.receiverName，如果为空则从其他来源获取
+  let receiverName = (metadata as any).receiverName;
+  
+  // 对于用户消息，如果 metadata 中没有 receiverName，尝试从 selectedModelId 获取
+  // 这确保在 data-appendMessage 事件处理之前，用户消息也能显示 @xxx 前缀
+  // 但是，如果是分享消息（用户-用户消息），不要从 selectedModelId 获取，只使用 metadata.receiverName
+  const isSharedMessage = (metadata as any).isSharedMessage || communicationType === "user_user";
+  if (isLocalUser && !receiverName && !isSharedMessage && selectedModelId && !selectedModelId.startsWith("user::")) {
+    // 用户消息且是 user_agent 类型：从 chatModels 查找 Agent 显示名称
+    if (chatModels.length > 0) {
+      const foundAgent = chatModels.find(
+        (m) => m.type === "agent" && m.id === selectedModelId
+      );
+      receiverName = foundAgent?.name || selectedModelId;
+    } else {
+      receiverName = selectedModelId;
+    }
+  }
+  
+  // ✅ 最佳实践：直接使用后端传递的可靠数据，减少前端逻辑判断
+  // 后端在流式响应开始时通过 metadata 事件传递 agent_id（metadata.agentUsed）
+  // 前端应该直接使用后端传递的 agent_id，确保与思考消息一致
+  // 思考消息使用 selectedModelId（agent_id），流式回复消息使用 metadata.agentUsed（也是 agent_id）
+  // 两者应该一致，因为都来自同一个 selectedChatModel
+  let avatarSeed: string;
+  if (isAgent) {
+    // Agent 消息：优先使用后端传递的 agent_id（metadata.agentUsed），确保与思考消息一致
+    // 后端保证 metadata.agentUsed 与请求中的 agent_id 一致
+    avatarSeed = (metadata as any).agentUsed || (metadata as any).senderId || selectedModelId || "default";
+  } else {
+    // 用户消息或其他：使用 senderId 或 senderName
+    avatarSeed = (metadata as any).senderId || senderName || "default";
+  }
   
   // 获取头像信息（包含图标变体）
   const avatarInfo = getAvatarInfo(
@@ -271,12 +298,15 @@ const PurePreviewMessage = ({
             // 构建要渲染的文本内容
             // 对于用户消息，显示 @receiverName（接收方是 Agent 或远端用户）
             // 对于 assistant 消息（Agent 或远端用户），收信方都是右侧本地用户，因此不添加@xxx
+            // 但是，如果是分享消息（用户-用户消息），文本内容已经包含了 @xxx，不再添加
             let displayText = sanitizeText(textContent);
-            if (receiverName && isLocalUser) {
-              // 用户消息：显示 @receiverName（接收方是 Agent 或远端用户）
+            const isSharedMessage = (metadata as any).isSharedMessage || communicationType === "user_user";
+            if (receiverName && isLocalUser && !isSharedMessage) {
+              // 用户消息（非分享消息）：显示 @receiverName（接收方是 Agent 或远端用户）
               displayText = `@${receiverName} ${displayText}`;
             }
             // 左侧消息（Agent 或远端用户）不添加@xxx，因为收信方都是右侧本地用户
+            // 分享消息（用户-用户消息）不添加@xxx，因为文本内容已经包含了 @转发对象用户名
 
             return (
               <div key={key}>
@@ -294,7 +324,7 @@ const PurePreviewMessage = ({
                       : undefined
                   }
                 >
-                  <Response>{displayText}</Response>
+                  <Response isStreaming={isLoading}>{displayText}</Response>
                 </MessageContent>
               </div>
             );
@@ -612,6 +642,12 @@ export const ThinkingMessage = ({
     }
   }
   
+  // ✅ 最佳实践：思考消息使用 selectedModelId（agent_id），与流式回复消息的 metadata.agentUsed 一致
+  // 后端保证在流式响应开始时通过 metadata 事件传递 agent_id（metadata.agentUsed）
+  // 这个 agent_id 与请求中的 selectedChatModel（即 selectedModelId）一致
+  // 因此思考消息和流式回复消息使用相同的 agent_id，头像自然一致
+  const avatarSeed = selectedModelId || displayAgentName;
+  
   return (
     <div
       className="group/message fade-in w-full animate-in duration-300"
@@ -624,7 +660,7 @@ export const ThinkingMessage = ({
             <div className="animate-pulse">
               <UnifiedAvatar
                 name={displayAgentName}
-                id={selectedModelId || displayAgentName}
+                id={avatarSeed} // ✅ 使用 avatarSeed 确保与流式回复消息一致
                 isAgent={true}
                 size={32}
               />

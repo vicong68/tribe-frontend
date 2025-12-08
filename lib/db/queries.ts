@@ -602,6 +602,26 @@ export async function getMessageById({ id }: { id: string }) {
   }
 }
 
+export async function deleteMessageById({ id }: { id: string }) {
+  try {
+    // 先删除相关的投票记录
+    await db.delete(vote).where(eq(vote.messageId, id));
+    
+    // 删除消息
+    const [deletedMessage] = await db
+      .delete(message)
+      .where(eq(message.id, id))
+      .returning();
+    
+    return deletedMessage || null;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to delete message by id"
+    );
+  }
+}
+
 export async function deleteMessagesByChatIdAfterTimestamp({
   chatId,
   timestamp,

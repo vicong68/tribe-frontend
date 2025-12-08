@@ -20,6 +20,7 @@ import { convertToUIMessages, generateUUID, getTextFromMessage, isValidUUID, fet
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 import { entityCache } from "@/lib/cache/entity-cache";
+import { z } from "zod";
 
 const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
@@ -134,7 +135,7 @@ export async function POST(request: Request) {
   try {
     const json = await request.json();
     requestBody = postRequestBodySchema.parse(json);
-  } catch (error) {
+  } catch (error: unknown) {
     // 记录详细的验证错误信息，便于调试
     if (process.env.NODE_ENV === "development") {
       console.error("[Chat API] Schema validation error:", error);
@@ -337,16 +338,6 @@ export async function POST(request: Request) {
       ],
     });
 
-    // 构建完整的用户消息对象（包含 metadata）
-    // 注意：使用客户端发送的原始消息 ID，确保与 useChat 生成的消息 ID 匹配
-    // 如果 ID 被转换，在 metadata 中保存 originalMessageId 以便客户端匹配
-    const completeUserMessage: ChatMessage = {
-      id: message.id, // 使用客户端发送的原始 ID，确保与 useChat 匹配
-      role: "user",
-      parts: message.parts,
-      metadata: userMessageMetadata,
-    };
-
     // 构建后端 API 请求体
     // 提取最后一条用户消息的内容（使用统一的工具函数）
     const messageContent = getTextFromMessage(message);
@@ -355,10 +346,10 @@ export async function POST(request: Request) {
     const messageParts = message.parts || [];
     const fileParts = messageParts.filter((part) => part.type === "file");
     const fileAttachment = fileParts.length > 0 ? {
-      file_id: fileParts[0].url, // 使用URL作为file_id
-      download_url: fileParts[0].url,
-      file_name: fileParts[0].name || fileParts[0].filename || "file",
-      file_type: fileParts[0].mediaType || fileParts[0].contentType || "application/octet-stream",
+      file_id: (fileParts[0] as any).url, // 使用URL作为file_id
+      download_url: (fileParts[0] as any).url,
+      file_name: (fileParts[0] as any).name || "file",
+      file_type: (fileParts[0] as any).mediaType || "application/octet-stream",
     } : undefined;
 
     // 构建历史消息（转换为后端格式）
@@ -367,6 +358,8 @@ export async function POST(request: Request) {
       ? convertToUIMessages(messagesFromDb).map((msg) => ({
           role: msg.role,
           content: getTextFromMessage(msg),
+          // 保留历史消息的 metadata，方便后端在流式响应中透传（如 agent 路由信息）
+          metadata: msg.metadata,
         }))
       : [];
 
@@ -376,6 +369,8 @@ export async function POST(request: Request) {
       {
         role: "user" as const,
         content: messageContent,
+        // 将前端生成的 metadata 一并传给后端，便于在流式响应中透传（包括 agent/id 路由信息）
+        metadata: userMessageMetadata,
       },
     ];
 
@@ -571,54 +566,10 @@ export async function POST(request: Request) {
       const reader = backendResponse.body?.getReader();
       const decoder = new TextDecoder();
       const encoder = new TextEncoder();
-      
-      // 在流式响应开始前，先发送用户消息的 data-appendMessage 事件（包含 metadata）
-      // 这样客户端可以立即获取到包含 metadata 的用户消息
-      (async () => {
-        try {
-          const appendUserMessageEvent = `2:{"type":"data-appendMessage","data":${JSON.stringify(completeUserMessage)}}\n`;
-          await writer.write(encoder.encode(appendUserMessageEvent));
-        } catch (error) {
-          // 静默处理错误，不影响流式响应
-        }
-      })();
-      
-      // 用于收集 assistant 消息内容
-      let assistantMessageId: string | null = null;
-      let assistantMessageParts: Array<{ type: string; text?: string; reasoning?: string }> = [];
-      let messageTextBuffer = "";
       let pendingChunk = "";
-      let messageSaved = false; // 跟踪消息是否已保存，避免重复保存
       
-      // 构建固定的metadata（从用户消息的metadata中复制并反转收发方）
-      // 用户消息的metadata包含：senderName, receiverName, communicationType等
-      // Assistant消息的metadata应该：发送方是用户消息的接收方，接收方是用户消息的发送方
-      const fixedMetadata: Record<string, any> = {
-        createdAt: new Date().toISOString(),
-        // 从用户消息的metadata中复制communicationType
-        communicationType: userMessageMetadata.communicationType,
-      };
-      
-      if (isUserToUser) {
-        // 用户-用户对话：远端用户是发送方，本地用户是接收方
-        // 从用户消息的metadata中复制：发送方是用户消息的接收方，接收方是用户消息的发送方
-        fixedMetadata.senderId = userMessageMetadata.receiverId; // 远端用户 ID
-        fixedMetadata.senderName = userMessageMetadata.receiverName; // 远端用户名称
-        fixedMetadata.receiverId = userMessageMetadata.senderId; // 本地用户 ID
-        fixedMetadata.receiverName = userMessageMetadata.senderName; // 本地用户名称
-        fixedMetadata.communicationType = "user_user";
-      } else {
-        // 用户-Agent对话：Agent 是发送方，本地用户是接收方
-        // 从用户消息的metadata中复制：发送方是Agent，接收方是本地用户
-        fixedMetadata.agentUsed = userMessageMetadata.agentUsed || userMessageMetadata.receiverId; // Agent ID
-        fixedMetadata.senderId = userMessageMetadata.receiverId; // Agent ID（用于头像固化）
-        fixedMetadata.senderName = userMessageMetadata.receiverName; // Agent 名称（从用户消息的metadata中复制）
-        fixedMetadata.receiverId = userMessageMetadata.senderId; // 本地用户 ID
-        fixedMetadata.receiverName = userMessageMetadata.senderName; // 本地用户名称
-        fixedMetadata.communicationType = "user_agent";
-      }
-      
-      // 异步处理流式响应
+      // 异步处理流式响应：直接转发后端流
+      // 注意：用户消息由 useChat 自动管理，不需要通过 data-appendMessage 发送
       (async () => {
         try {
           if (!reader) {
@@ -626,243 +577,25 @@ export async function POST(request: Request) {
             return;
           }
           
+          // 转发后端流：直接转发原始 SSE 事件，确保跨 chunk 事件完整性
           while (true) {
             const { done, value } = await reader.read();
-            if (done) {
-              // 流结束，检查是否有未保存的消息（兜底逻辑）
-              // 只在 finish 事件未触发或保存失败时执行
-              if (!messageSaved && assistantMessageId && messageTextBuffer.trim()) {
-                // 保存 messageId 到局部变量，确保类型收窄
-                const messageId = assistantMessageId;
-                const trimmedText = messageTextBuffer.trim();
-                
-                try {
-                  // 检查消息 ID 是否为有效的 UUID 格式
-                  let dbMessageId = messageId;
-                  const metadata = { ...fixedMetadata };
-                  if (!isValidUUID(messageId)) {
-                    // 生成新的 UUID 作为数据库 ID
-                    dbMessageId = generateUUID();
-                    metadata.originalMessageId = messageId;
-                  }
-                  
-                  // 构建消息 parts
-                  const finalParts: Array<{ type: string; text?: string; reasoning?: string }> = [];
-                  
-                  // 添加 reasoning parts
-                  for (const part of assistantMessageParts) {
-                    if (part.type === "reasoning") {
-                      finalParts.push({
-                        type: "reasoning",
-                        reasoning: part.reasoning,
-                      });
-                    }
-                  }
-                  
-                  // 添加文本内容
-                  if (trimmedText) {
-                    finalParts.push({
-                      type: "text",
-                      text: trimmedText,
-                    });
-                  }
-                  
-                  await saveMessages({
-                    messages: [
-                      {
-                        chatId: id,
-                        id: dbMessageId, // 使用有效的 UUID
-                        role: "assistant",
-                        parts: finalParts as any,
-                        attachments: [],
-                        metadata: metadata,
-                        createdAt: new Date(),
-                      },
-                    ],
-                  });
-                  messageSaved = true;
-                } catch (error) {
-                  // 静默处理错误
-                }
-              }
-              break;
-            }
+            if (done) break;
             
             const chunk = decoder.decode(value, { stream: true });
             const fullChunk = pendingChunk + chunk;
-            const lines = fullChunk.split("\n");
-            pendingChunk = lines.pop() || ""; // 保存不完整的行
+            const lastNewlineIndex = fullChunk.lastIndexOf("\n\n");
             
-            for (const line of lines) {
-              if (!line.trim()) {
-                await writer.write(encoder.encode(line + "\n"));
-                continue;
-              }
-              
-              if (line.startsWith("data: ")) {
-                const data = line.slice(6).trim();
-                
-                if (!data) {
-                  await writer.write(encoder.encode(line + "\n"));
-                  continue;
-                }
-                
-                try {
-                  const parsed = JSON.parse(data);
-                  
-                  // 检测消息开始
-                  if (parsed.type === "text-start" && parsed.id) {
-                    assistantMessageId = parsed.id;
-                    assistantMessageParts = [];
-                    messageTextBuffer = "";
-                    
-                    // 立即发送包含 metadata 的 data-appendMessage 事件
-                    // 这样客户端可以在流式回复开始时就能获取到正确的名称
-                    // 避免在流式回复过程中显示默认的"智能体"名称
-                    try {
-                      const initialMessage: ChatMessage = {
-                        id: assistantMessageId,
-                        role: "assistant",
-                        parts: [], // 初始时 parts 为空，流式响应会逐步填充
-                        metadata: fixedMetadata, // 使用固定的 metadata，确保名称正确
-                      };
-                      
-                      const appendMessageEvent = `2:{"type":"data-appendMessage","data":${JSON.stringify(initialMessage)}}\n`;
-                      await writer.write(encoder.encode(appendMessageEvent));
-                    } catch (error) {
-                      // 静默处理错误，不影响流式响应
-                    }
-                  }
-                  
-                  // 收集文本内容
-                  if (assistantMessageId && parsed.type === "text-delta" && parsed.delta) {
-                    messageTextBuffer += parsed.delta;
-                  }
-                  
-                  // 收集 reasoning 内容（JSON SSE 格式）
-                  if (assistantMessageId && parsed.type === "message-annotations" && parsed.parts) {
-                    for (const part of parsed.parts) {
-                      if (part.type === "reasoning" && part.reasoning) {
-                        assistantMessageParts.push({
-                          type: "reasoning",
-                          reasoning: part.reasoning,
-                        });
-                      }
-                    }
-                  }
-                  
-                  // 收集 reasoning 内容（Data Stream Protocol 格式）
-                  if (assistantMessageId && parsed.type === "reasoning" && parsed.reasoning) {
-                    assistantMessageParts.push({
-                      type: "reasoning",
-                      reasoning: parsed.reasoning,
-                    });
-                  }
-                  
-                  // 检测完成事件
-                  if (parsed.type === "finish") {
-                    // 流式响应完成，保存 assistant 消息到数据库
-                    // 符合 AI SDK 最佳实践：确保所有必需字段存在后再保存
-                    if (!messageSaved && assistantMessageId && messageTextBuffer.trim()) {
-                      // 保存 messageId 到局部变量，确保类型收窄传递到 Promise 回调
-                      const messageId = assistantMessageId;
-                      const trimmedText = messageTextBuffer.trim();
-                      
-                      try {
-                        // 构建消息 parts
-                        const parts: Array<{ type: string; text?: string; reasoning?: string }> = [];
-                        
-                        // 添加 reasoning parts
-                        for (const part of assistantMessageParts) {
-                          if (part.type === "reasoning") {
-                            parts.push({
-                              type: "reasoning",
-                              reasoning: part.reasoning,
-                            });
-                          }
-                        }
-                        
-                        // 添加文本内容
-                        if (trimmedText) {
-                          parts.push({
-                            type: "text",
-                            text: trimmedText,
-                          });
-                        }
-                        
-                        // 使用固定的metadata（在消息创建时已绑定，确保不被重写）
-                        const metadata = { ...fixedMetadata };
-                        
-                        // 检查消息 ID 是否为有效的 UUID 格式
-                        let dbMessageId = messageId;
-                        if (!isValidUUID(messageId)) {
-                          // 生成新的 UUID 作为数据库 ID
-                          dbMessageId = generateUUID();
-                          metadata.originalMessageId = messageId;
-                        }
-                        
-                        // 构建完整的消息对象（包含 metadata）
-                        // 注意：使用客户端 useChat 生成的原始消息 ID，确保与客户端消息匹配
-                        // 如果 ID 被转换，在 metadata 中保存 originalMessageId 以便客户端匹配
-                        const completeMessage: ChatMessage = {
-                          id: messageId, // 使用客户端 useChat 生成的原始 ID，确保匹配
-                          role: "assistant",
-                          parts: parts as any,
-                          metadata: metadata,
-                        };
-                        
-                        const appendMessageEvent = `2:{"type":"data-appendMessage","data":${JSON.stringify(completeMessage)}}\n`;
-                        await writer.write(encoder.encode(appendMessageEvent));
-                        
-                        // 立即保存消息（不阻塞流式响应）
-                        // 符合 AI SDK 最佳实践：在服务器端保存消息
-                        // 参考: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot/message-persistence
-                        (async () => {
-                          try {
-                            await saveMessages({
-                              messages: [
-                                {
-                                  chatId: id,
-                                  id: dbMessageId, // 使用有效的 UUID
-                                  role: "assistant",
-                                  parts: parts as any,
-                                  attachments: [],
-                                  metadata: metadata,
-                                  createdAt: new Date(),
-                                },
-                              ],
-                            });
-                            messageSaved = true;
-                          } catch (error) {
-                            // 静默处理错误
-                          }
-                        })();
-                      } catch (error) {
-                        // 静默处理错误
-                      }
-                    }
-                    
-                    // 重置状态
-                    assistantMessageId = null;
-                    assistantMessageParts = [];
-                    messageTextBuffer = "";
-                  }
-                } catch {
-                  // 忽略 JSON 解析错误（可能是其他格式的数据）
-                }
-              }
-              
-              // 转发原始数据
-              await writer.write(encoder.encode(line + "\n"));
+            if (lastNewlineIndex >= 0) {
+              const completePart = fullChunk.substring(0, lastNewlineIndex + 2);
+              pendingChunk = fullChunk.substring(lastNewlineIndex + 2);
+              await writer.write(encoder.encode(completePart));
+            } else {
+              pendingChunk = fullChunk;
             }
           }
-          
-          // 处理剩余的 pending chunk
-          if (pendingChunk) {
-            await writer.write(encoder.encode(pendingChunk));
-          }
         } catch (error) {
-          // 静默处理错误
+          // 静默处理错误，不影响流式响应
         } finally {
           writer.close();
         }
