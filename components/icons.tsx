@@ -1277,3 +1277,37 @@ export const WarningIcon = ({ size = 16 }: { size?: number }) => {
     </svg>
   );
 };
+
+export const StarIcon = ({ size = 16 }: { size?: number }) => (
+  <svg
+    height={size}
+    strokeLinejoin="round"
+    style={{ color: "currentcolor" }}
+    viewBox="0 0 16 16"
+    width={size}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M8 0L9.7082 5.52786L15.6085 5.52786L10.9501 8.94427L12.6583 14.4721L8 11.0557L3.34171 14.4721L5.04991 8.94427L0.391619 5.52786L6.2918 5.52786L8 0Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    />
+  </svg>
+);
+
+export const StarFilledIcon = ({ size = 16 }: { size?: number }) => (
+  <svg
+    height={size}
+    strokeLinejoin="round"
+    style={{ color: "currentcolor" }}
+    viewBox="0 0 16 16"
+    width={size}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M8 0L9.7082 5.52786L15.6085 5.52786L10.9501 8.94427L12.6583 14.4721L8 11.0557L3.34171 14.4721L5.04991 8.94427L0.391619 5.52786L6.2918 5.52786L8 0Z"
+      fill="currentColor"
+    />
+  </svg>
+);

@@ -19,19 +19,30 @@ export interface FileUploadConfig {
  * 默认文件上传配置
  */
 const DEFAULT_CONFIG: FileUploadConfig = {
-  maxFileSize: 5 * 1024 * 1024, // 5MB（可根据需要调整）
+  maxFileSize: 100 * 1024 * 1024, // 100MB（支持大文件，与后端一致）
   allowedMimeTypes: [
-    // 图片类型
+    // 图片类型（支持缩略图预览）
     "image/jpeg",
     "image/jpg",
     "image/png",
     "image/gif",
     "image/webp",
-    // 可以根据需要扩展其他类型
-    // "application/pdf",
-    // "text/plain",
-    // "application/msword",
-    // "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "image/bmp",
+    "image/svg+xml",
+    // 文档类型（支持Agent处理）
+    "application/pdf",
+    "application/msword", // .doc
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+    "application/vnd.ms-powerpoint", // .ppt
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation", // .pptx
+    "application/vnd.ms-excel", // .xls
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+    // 文本类型
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    // 其他类型（允许所有类型，由后端验证）
+    "application/octet-stream",
   ],
   enableCompression: false, // 默认关闭（可根据需要启用）
   compressionQuality: 80, // 压缩质量（0-100）

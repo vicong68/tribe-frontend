@@ -98,6 +98,17 @@ export function ModelSelector({
     ) || modelsWithAvatars[0]; // 如果找不到，使用第一个
   }, [optimisticModelId, modelsWithAvatars]);
 
+  // 判断选中的模型是否是当前用户（本地用户不显示状态）
+  const isSelectedCurrentUser = useMemo(() => {
+    if (!selectedChatModel || selectedChatModel.type !== "user" || !isLoggedIn || !session?.user) {
+      return false;
+    }
+    const currentUserId = getBackendMemberId(session.user);
+    if (!currentUserId) return false;
+    const modelMemberId = selectedChatModel.id.replace(/^user::/, "");
+    return modelMemberId === currentUserId;
+  }, [selectedChatModel, isLoggedIn, session]);
+
   // 下拉打开时刷新用户列表（获取最新在线状态）
   const handleOpenChange = async (newOpen: boolean) => {
     setOpen(newOpen);
@@ -136,6 +147,8 @@ export function ModelSelector({
                 id={selectedChatModel.id}
                 isAgent={selectedChatModel.avatar.isAgent}
                 size={5}
+                showStatus={selectedChatModel.type === "user" && !isSelectedCurrentUser}
+                isOnline={selectedChatModel.type === "user" ? selectedChatModel.isOnline : undefined}
               />
             </div>
           )}
@@ -207,6 +220,15 @@ export function ModelSelector({
               .filter((m) => m.type === "user")
               .map((chatModel) => {
                 const { id } = chatModel;
+                
+                // 判断是否是当前用户（本地用户不显示状态）
+                const isModelCurrentUser = (() => {
+                  if (!isLoggedIn || !session?.user) return false;
+                  const currentUserId = getBackendMemberId(session.user);
+                  if (!currentUserId) return false;
+                  const modelMemberId = id.replace(/^user::/, "");
+                  return modelMemberId === currentUserId;
+                })();
 
                 return (
                   <DropdownMenuItem
@@ -233,24 +255,11 @@ export function ModelSelector({
                           id={chatModel.id}
                           isAgent={false}
                           size={6}
-                          showStatus={true}
+                          showStatus={!isModelCurrentUser}
                           isOnline={chatModel.isOnline}
                         />
                         <div className="flex flex-col items-start gap-1">
-                          <div className="flex items-center gap-2">
-                            <div className="text-sm sm:text-base">{chatModel.name}</div>
-                            {/* 在线状态指示：
-                                - 绿色圆点：在线
-                                - 红色圆点：离线
-                                - 黄色圆点：状态不可知（isOnline 为 undefined） */}
-                            {chatModel.isOnline === true ? (
-                              <span className="size-2 rounded-full bg-green-500" title="在线" />
-                            ) : chatModel.isOnline === false ? (
-                              <span className="size-2 rounded-full bg-red-500" title="离线" />
-                            ) : (
-                              <span className="size-2 rounded-full bg-yellow-500" title="状态未知" />
-                            )}
-                          </div>
+                          <div className="text-sm sm:text-base">{chatModel.name}</div>
                           <div className="line-clamp-2 text-muted-foreground text-xs">
                             用户
                           </div>

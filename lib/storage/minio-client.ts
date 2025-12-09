@@ -72,8 +72,9 @@ class MinIOClient {
     buffer: Buffer | ArrayBuffer,
     contentType: string,
     isPublic: boolean = true
-  ): Promise<{ url: string; pathname: string; contentType: string }> {
+  ): Promise<{ url: string; pathname: string; contentType: string; size: number; fileId: string }> {
     const bufferData = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    const fileSize = bufferData.length;
 
     const command = new PutObjectCommand({
       Bucket: this.bucket,
@@ -89,11 +90,17 @@ class MinIOClient {
 
     // 构建公开访问 URL
     const url = `${this.publicUrl}/${this.bucket}/${key}`;
+    
+    // 从key提取fileId（格式：users/{userId}/{timestamp}-{random}-{name}.{ext}）
+    // fileId使用pathname作为唯一标识
+    const fileId = key;
 
     return {
       url,
       pathname: key,
       contentType,
+      size: fileSize,
+      fileId,
     };
   }
 

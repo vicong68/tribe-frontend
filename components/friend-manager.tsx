@@ -15,6 +15,7 @@ import { Input } from "./ui/input";
 import { PlusIcon, TrashIcon } from "./icons";
 import { useChatModels, clearModelsCache } from "@/lib/ai/models-client";
 import { getBackendMemberId } from "@/lib/user-utils";
+import { useUserStatus } from "@/hooks/use-user-status";
 import { UnifiedAvatar } from "./unified-avatar";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -44,6 +45,14 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
 
   // 获取当前好友列表（用于判断是否已经是好友）
   const { models: currentFriends } = useChatModels(isLoggedIn, 0);
+
+  // 用户状态管理（统一状态管理）
+  const { getCachedStatus } = useUserStatus({
+    isLoggedIn,
+    onStatusUpdate: useCallback(() => {
+      // 状态更新时不需要特殊处理，缓存会自动更新
+    }, []),
+  });
 
   // 搜索用户和智能体
   const handleSearch = useCallback(async () => {
@@ -255,7 +264,21 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
 
             {filteredResults.length > 0 && (
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                {filteredResults.map((result) => (
+                {filteredResults.map((result) => {
+                  // 判断是否是当前用户（本地用户不显示状态）
+                  const isResultCurrentUser = (() => {
+                    if (result.type !== "user" || !isLoggedIn || !session?.user) return false;
+                    const currentUserId = getBackendMemberId(session.user);
+                    if (!currentUserId) return false;
+                    const resultMemberId = result.id.replace(/^user::/, "");
+                    return resultMemberId === currentUserId;
+                  })();
+                  
+                  // 统一状态管理：优先使用缓存状态，其次使用搜索结果中的状态
+                  const cachedStatus = result.type === "user" ? getCachedStatus(result.id) : undefined;
+                  const finalOnlineStatus = cachedStatus !== undefined ? cachedStatus : result.isOnline;
+                  
+                  return (
                   <div
                     key={result.id}
                     className={cn(
@@ -268,8 +291,8 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
                       id={result.id}
                       isAgent={result.type === "agent"}
                       size={8}
-                      showStatus={result.type === "user"}
-                      isOnline={result.isOnline}
+                      showStatus={result.type === "user" && !isResultCurrentUser}
+                      isOnline={finalOnlineStatus}
                     />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{result.name}</div>
@@ -285,7 +308,8 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
                       添加
                     </Button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 

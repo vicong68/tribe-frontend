@@ -9,6 +9,7 @@ import { RightSidebar } from "@/components/right-sidebar";
 import { DataStreamProvider } from "@/components/data-stream-provider";
 import { WebSocketMessageProvider } from "@/components/websocket-message-provider";
 import { SessionTimeoutProvider } from "@/components/session-timeout-provider";
+import { CollectionFilterProvider } from "@/components/collection-filter-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { auth } from "../(auth)/auth";
 import { RightSidebarProvider } from "@/components/right-sidebar-provider";
@@ -23,9 +24,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <DataStreamProvider>
         <WebSocketMessageProvider>
           <SessionTimeoutProvider>
-          <Suspense fallback={<div className="flex h-dvh" />}>
-            <SidebarWrapper>{children}</SidebarWrapper>
-          </Suspense>
+            <CollectionFilterProvider>
+              <Suspense fallback={<div className="flex h-dvh" />}>
+                <SidebarWrapper>{children}</SidebarWrapper>
+              </Suspense>
+            </CollectionFilterProvider>
           </SessionTimeoutProvider>
         </WebSocketMessageProvider>
       </DataStreamProvider>

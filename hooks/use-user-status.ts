@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
-import type { ChatModel } from "@/lib/ai/models";
+import { useCallback } from "react";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
@@ -10,13 +9,18 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:300
  */
 export type UserStatusUpdateCallback = (updates: Map<string, boolean>) => void;
 
+// 全局缓存，避免多个组件重复拉取
+const globalStatusCache = new Map<string, boolean>();
+let globalLastFetch = 0;
+const FETCH_COOLDOWN = 1000; // 1秒冷却时间，避免频繁请求
+
 /**
  * 用户状态管理 Hook
  * 
  * 功能：
  * 1. 快速查询用户在线状态（轻量级API）
  * 2. 监听SSE推送的用户状态更新
- * 3. 更新本地用户状态缓存
+ * 3. 更新全局用户状态缓存
  */
 export function useUserStatus({
   isLoggedIn,
@@ -25,10 +29,6 @@ export function useUserStatus({
   isLoggedIn: boolean;
   onStatusUpdate: UserStatusUpdateCallback;
 }) {
-  const statusCacheRef = useRef<Map<string, boolean>>(new Map());
-  const lastFetchRef = useRef<number>(0);
-  const FETCH_COOLDOWN = 1000; // 1秒冷却时间，避免频繁请求
-
   /**
    * 快速查询用户在线状态（轻量级API，只返回状态）
    */
@@ -38,11 +38,10 @@ export function useUserStatus({
     }
 
     const now = Date.now();
-    // 冷却时间检查
-    if (now - lastFetchRef.current < FETCH_COOLDOWN) {
-      return statusCacheRef.current;
+    if (now - globalLastFetch < FETCH_COOLDOWN) {
+      return new Map(globalStatusCache);
     }
-    lastFetchRef.current = now;
+    globalLastFetch = now;
 
     try {
       const response = await fetch(
@@ -57,29 +56,27 @@ export function useUserStatus({
       );
 
       if (!response.ok) {
-        return statusCacheRef.current;
+        return new Map(globalStatusCache);
       }
 
       const data = await response.json();
-      const statusMap = new Map<string, boolean>();
+      globalStatusCache.clear();
 
       if (data.users && Array.isArray(data.users)) {
         for (const user of data.users) {
           if (user.member_id && typeof user.is_online === "boolean") {
-            statusMap.set(user.member_id, user.is_online);
-            statusMap.set(`user::${user.member_id}`, user.is_online); // 同时支持两种格式
+            globalStatusCache.set(user.member_id, user.is_online);
+            globalStatusCache.set(`user::${user.member_id}`, user.is_online);
           }
         }
       }
 
-      // 更新缓存
-      statusCacheRef.current = statusMap;
-      return statusMap;
+      return new Map(globalStatusCache);
     } catch (error) {
       if (process.env.NODE_ENV === "development") {
         console.warn("[UserStatus] 查询用户状态失败:", error);
       }
-      return statusCacheRef.current;
+      return new Map(globalStatusCache);
     }
   }, [isLoggedIn]);
 
@@ -87,18 +84,15 @@ export function useUserStatus({
    * 处理SSE推送的用户状态更新
    */
   const handleStatusUpdate = useCallback((updates: Map<string, boolean>) => {
-    // 更新缓存
     for (const [userId, isOnline] of updates.entries()) {
-      statusCacheRef.current.set(userId, isOnline);
-      // 同时更新 user:: 格式
+      globalStatusCache.set(userId, isOnline);
       if (!userId.startsWith("user::")) {
-        statusCacheRef.current.set(`user::${userId}`, isOnline);
+        globalStatusCache.set(`user::${userId}`, isOnline);
       } else {
         const memberId = userId.replace(/^user::/, "");
-        statusCacheRef.current.set(memberId, isOnline);
+        globalStatusCache.set(memberId, isOnline);
       }
     }
-    // 通知回调
     onStatusUpdate(updates);
   }, [onStatusUpdate]);
 
@@ -106,7 +100,7 @@ export function useUserStatus({
     fetchUserStatus,
     handleStatusUpdate,
     getCachedStatus: useCallback((userId: string): boolean | undefined => {
-      return statusCacheRef.current.get(userId);
+      return globalStatusCache.get(userId);
     }, []),
   };
 }

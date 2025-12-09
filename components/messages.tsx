@@ -8,6 +8,10 @@ import type { ChatMessage } from "@/lib/types";
 import { useDataStream } from "./data-stream-provider";
 import { Greeting } from "./greeting";
 import { PreviewMessage, ThinkingMessage } from "./message";
+import { useCollectionFilter } from "./collection-filter-provider";
+import useSWR from "swr";
+import { useSession } from "next-auth/react";
+import { getBackendMemberId } from "@/lib/user-utils";
 
 type MessagesProps = {
   chatId: string;
@@ -44,10 +48,38 @@ function PureMessages({
   });
 
   useDataStream();
+  const { showOnlyCollected } = useCollectionFilter();
+  const { data: session } = useSession();
+  const isLoggedIn = session?.user?.type === "regular";
+  const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
+
+  // 获取收藏列表（用于过滤消息）
+  const { data: collections } = useSWR<Array<{ message_id: string }>>(
+    showOnlyCollected && isLoggedIn && currentUserId ? "/api/collections" : null,
+    async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) {
+        return [];
+      }
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    }
+  );
+
+  // 创建收藏消息ID集合
+  const collectedMessageIds = useMemo(() => {
+    if (!collections) return new Set<string>();
+    return new Set(collections.map((c) => c.message_id));
+  }, [collections]);
 
   // 去重消息列表：保留最后一条重复的消息（基于 message.id）
   // 这可以防止重试或流式响应时产生的重复消息导致 React key 警告
   // 同时过滤掉空消息（parts 为空或没有有效内容）
+  // 如果启用了收藏过滤，只显示已收藏的消息
   const uniqueMessages = useMemo(() => {
     const seen = new Map<string, ChatMessage>();
     for (const message of messages) {
@@ -55,9 +87,17 @@ function PureMessages({
     }
     const result = Array.from(seen.values());
     
+    // 如果启用了收藏过滤，先过滤出已收藏的消息
+    let preFilteredMessages = result;
+    if (showOnlyCollected && collectedMessageIds.size > 0) {
+      preFilteredMessages = result.filter((message) => 
+        collectedMessageIds.has(message.id)
+      );
+    }
+    
     // 过滤空消息：parts 为空或没有有效的文本内容
     // 注意：用户消息应该总是有内容，不应该被过滤（除非确实为空）
-    const filteredMessages = result.filter((message) => {
+    const filteredMessages = preFilteredMessages.filter((message) => {
       const parts = message.parts || [];
       
       if (message.role === "user") {
@@ -81,7 +121,7 @@ function PureMessages({
     });
     
     return filteredMessages;
-  }, [messages, chatId]);
+  }, [messages, chatId, showOnlyCollected, collectedMessageIds]);
   
   // 当最后一条用户消息不在视口中时，确保滚动到可见位置
   // 注意：这个 useEffect 必须在 uniqueMessages 定义之后

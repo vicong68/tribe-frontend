@@ -220,6 +220,15 @@ export function FriendsList() {
                     用户
                   </div>
                   {usersWithAvatars.map((model) => {
+                    // 判断是否是当前用户（本地用户不显示状态）
+                    const isModelCurrentUser = (() => {
+                      if (!isLoggedIn || !session?.user) return false;
+                      const currentUserId = getBackendMemberId(session.user);
+                      if (!currentUserId) return false;
+                      const modelMemberId = model.id.replace(/^user::/, "");
+                      return modelMemberId === currentUserId;
+                    })();
+                    
                     return (
                       <div
                         key={model.id}
@@ -233,7 +242,7 @@ export function FriendsList() {
                           id={model.id}
                           isAgent={false}
                           size={8}
-                          showStatus={true}
+                          showStatus={!isModelCurrentUser}
                           isOnline={model.isOnline}
                         />
                         <div className="flex-1 min-w-0">

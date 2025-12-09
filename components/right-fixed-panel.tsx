@@ -5,7 +5,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useRightSidebar } from "@/components/right-sidebar-provider";
 import { useEffect, useState } from "react";
 import { RightSidebarToggle } from "@/components/right-sidebar-toggle";
-import { CollectionsList } from "@/components/collections-list";
+import { KnowledgeBasePanel } from "@/components/knowledge-base/knowledge-base-panel";
 
 /**
  * 右侧知识库面板
@@ -88,18 +88,9 @@ export function RightFixedPanel() {
           <RightSidebarToggle />
         </div>
         
-        {/* 知识库管理区域（上半部分，留空） */}
-        <div className="flex-1 p-4 border-b border-sidebar-border">
-          <div className="text-sm font-semibold mb-2">知识库管理</div>
-          <div className="text-sm text-muted-foreground">
-            {/* 预留空间，后续添加知识库管理功能 */}
-          </div>
-        </div>
-        
-        {/* 收藏/上下文管理区域（下半部分） */}
-        <div className="flex-1 p-4 overflow-hidden flex flex-col">
-          <div className="text-sm font-semibold mb-2">收藏/上下文管理</div>
-          <CollectionsList />
+        {/* 知识库管理区域（上半部分，集成 KnowledgeBasePanel） */}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <KnowledgeBasePanel />
         </div>
       </div>
     </div>

@@ -128,8 +128,7 @@ export function UserProfileCard() {
             id={profile.member_id}
             isAgent={false}
             size={12}
-            showStatus={true}
-            isOnline={profile.is_online}
+            showStatus={false}
           />
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-sm truncate">{profile.nickname}</div>
@@ -160,15 +159,6 @@ export function UserProfileCard() {
           <div className="flex justify-between">
             <span className="text-muted-foreground">最后登录</span>
             <span className="text-xs">{formatDate(profile.last_login_at)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">在线状态</span>
-            <span className={cn(
-              "text-xs font-medium",
-              profile.is_online ? "text-green-600" : "text-muted-foreground"
-            )}>
-              {profile.is_online ? "在线" : "离线"}
-            </span>
           </div>
         </div>
       </CardContent>

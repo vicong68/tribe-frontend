@@ -2,7 +2,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { useSession } from "next-auth/react";
-import { memo, useState, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
@@ -17,6 +17,7 @@ import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
 import { MessageContent } from "./elements/message";
 import { Response } from "./elements/response";
+import { useUserStatus } from "@/hooks/use-user-status";
 import {
   Tool,
   ToolContent,
@@ -57,6 +58,7 @@ const PurePreviewMessage = ({
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const { data: session } = useSession();
+  const isLoggedIn = session?.user?.type === "regular";
   
   // 缓存消息parts的提取结果，避免重复操作
   const messageParts = message.parts || [];
@@ -79,13 +81,56 @@ const PurePreviewMessage = ({
     (message.role === "assistant" && !(metadata as any).communicationType && selectedModelId && !selectedModelId.startsWith("user::"));
   const isRemoteUser = isRemoteUserMessage(message.role, (metadata as any).communicationType);
   const isLocalUser = message.role === "user";
+  const senderIdForStatus = useMemo(() => {
+    const senderId = (metadata as any).senderId as string | undefined;
+    if (senderId) return senderId;
+    if (isRemoteUser) return (metadata as any).sender_name;
+    if (isLocalUser) return session?.user?.memberId || session?.user?.email?.split("@")[0];
+    return undefined;
+  }, [metadata, isRemoteUser, isLocalUser, session]);
+
+  // 用户在线状态（用于头像指示）
+  const [statusVersion, setStatusVersion] = useState(0);
+  const { fetchUserStatus, handleStatusUpdate, getCachedStatus } = useUserStatus({
+    isLoggedIn: Boolean(isLoggedIn),
+    onStatusUpdate: useCallback(() => {
+      setStatusVersion((prev) => prev + 1);
+    }, []),
+  });
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    fetchUserStatus().then((updates) => {
+      if (updates.size > 0) {
+        handleStatusUpdate(updates);
+      }
+    });
+  }, [fetchUserStatus, handleStatusUpdate, isLoggedIn]);
+
+  useEffect(() => {
+    const handleUserStatusUpdate = (event: Event) => {
+      const customEvent = event as CustomEvent<{ member_id?: string; is_online?: boolean }>;
+      const { member_id, is_online } = customEvent.detail || {};
+      if (!member_id || typeof is_online !== "boolean") {
+        return;
+      }
+      const updates = new Map<string, boolean>();
+      updates.set(member_id, is_online);
+      updates.set(`user::${member_id}`, is_online);
+      handleStatusUpdate(updates);
+    };
+
+    window.addEventListener("sse_user_status_update", handleUserStatusUpdate);
+    return () => {
+      window.removeEventListener("sse_user_status_update", handleUserStatusUpdate);
+    };
+  }, [handleStatusUpdate]);
   
   // 判断是否需要从chatModels查找名称（仅在metadata中没有名称时）
   // 新消息：metadata已固化，包含准确的名称
   // 旧消息：可能没有metadata.senderName，需要从chatModels查找作为兜底
   // 注意：对于Agent消息，即使metadata中有agentUsed（agent_id），也需要从chatModels查找显示名称
   const needsChatModelsLookup = !isLocalUser && (!(metadata as any).senderName || (isAgent && (metadata as any).agentUsed && !(metadata as any).senderName));
-  const isLoggedIn = session?.user?.type === "regular";
   // Hooks必须在顶层调用，但可以通过参数控制是否实际加载
   // 对于Agent消息，即使访客用户也需要加载chatModels以查找agent显示名称
   // 注意：访客用户也需要加载chatModels以查找agent显示名称，但不包含用户列表
@@ -177,7 +222,18 @@ const PurePreviewMessage = ({
   // 对于用户消息，如果 metadata 中没有 receiverName，尝试从 selectedModelId 获取
   // 这确保在 data-appendMessage 事件处理之前，用户消息也能显示 @xxx 前缀
   // 但是，如果是分享消息（用户-用户消息），不要从 selectedModelId 获取，只使用 metadata.receiverName
-  const isSharedMessage = (metadata as any).isSharedMessage || communicationType === "user_user";
+  const isSharedMessage = Boolean((metadata as any).isSharedMessage);
+
+  // 用户-用户直发：补齐收件人名称，优先使用 metadata，其次使用 receiverId（去掉 user:: 前缀）
+  if (
+    isLocalUser &&
+    communicationType === "user_user" &&
+    !receiverName
+  ) {
+    const receiverId = (metadata as any).receiverId as string | undefined;
+    receiverName = receiverId?.replace(/^user::/, "") || receiverName;
+  }
+
   if (isLocalUser && !receiverName && !isSharedMessage && selectedModelId && !selectedModelId.startsWith("user::")) {
     // 用户消息且是 user_agent 类型：从 chatModels 查找 Agent 显示名称
     if (chatModels.length > 0) {
@@ -211,6 +267,13 @@ const PurePreviewMessage = ({
     avatarSeed,
     !!(isAgent && !isRemoteUser)
   );
+
+  // 在线状态指示（仅用户头像展示）
+  const userOnlineStatus = useMemo(() => {
+    if (isAgent) return undefined;
+    if (!senderIdForStatus) return undefined;
+    return getCachedStatus(senderIdForStatus) ?? getCachedStatus(`user::${senderIdForStatus}`);
+  }, [getCachedStatus, senderIdForStatus, isAgent, statusVersion]);
   
   // 是否需要显示等待效果（仅agent需要）
   const showThinking = !!(isAgent && isLoading);
@@ -260,16 +323,57 @@ const PurePreviewMessage = ({
             })}
             data-testid={"message-attachments"}
           >
-            {attachmentsFromMessage.map((attachment) => (
-              <PreviewAttachment
-                attachment={{
-                  name: attachment.filename ?? "file",
-                  contentType: attachment.mediaType,
-                  url: attachment.url,
-                }}
-                key={attachment.url}
-              />
-            ))}
+            {attachmentsFromMessage.map((attachment, index) => {
+              // 支持多种文件附件格式：
+              // 1. 直接格式：{type: "file", url, name, mediaType, size, fileId}
+              // 2. 嵌套格式：{type: "file", file: {file_id, filename, download_url, size}}
+              const fileObj = (attachment as any).file || attachment;
+              const fileUrl = fileObj.url || fileObj.download_url || attachment.url || "";
+              const fileName = fileObj.filename || fileObj.name || attachment.name || attachment.filename || "file";
+              const fileSize = fileObj.size || attachment.size;
+              const fileId = fileObj.fileId || fileObj.file_id || attachment.fileId || attachment.file_id;
+              const contentType = fileObj.mediaType || fileObj.file_type || attachment.mediaType || attachment.file_type;
+              
+              return (
+                <PreviewAttachment
+                  key={fileUrl || fileId || `${fileName}-${index}`}
+                  attachment={{
+                    name: fileName,
+                    contentType: contentType,
+                    url: fileUrl,
+                    size: fileSize,
+                    fileId: fileId,
+                  }}
+                  isInMessage={true}
+                  onDownload={() => {
+                    // 下载文件：用户-用户模式直接下载，用户-Agent模式也支持下载
+                    if (fileUrl) {
+                      const link = document.createElement("a");
+                      link.href = fileUrl;
+                      link.download = fileName;
+                      link.target = "_blank";
+                      link.rel = "noopener noreferrer"; // 安全属性
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    } else {
+                      // 如果没有URL，尝试通过fileId下载
+                      if (fileId) {
+                        const downloadUrl = `/api/files/download/${fileId}`;
+                        const link = document.createElement("a");
+                        link.href = downloadUrl;
+                        link.download = fileName;
+                        link.target = "_blank";
+                        link.rel = "noopener noreferrer";
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }
+                    }
+                  }}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -300,7 +404,7 @@ const PurePreviewMessage = ({
             // 对于 assistant 消息（Agent 或远端用户），收信方都是右侧本地用户，因此不添加@xxx
             // 但是，如果是分享消息（用户-用户消息），文本内容已经包含了 @xxx，不再添加
             let displayText = sanitizeText(textContent);
-            const isSharedMessage = (metadata as any).isSharedMessage || communicationType === "user_user";
+            const isSharedMessage = Boolean((metadata as any).isSharedMessage);
             if (receiverName && isLocalUser && !isSharedMessage) {
               // 用户消息（非分享消息）：显示 @receiverName（接收方是 Agent 或远端用户）
               displayText = `@${receiverName} ${displayText}`;
@@ -489,6 +593,7 @@ const PurePreviewMessage = ({
   }
 
   // 渲染头像组件（使用统一头像组件）
+  // 注意：本地用户不显示在线状态（因为本地用户必然已登录）
   const renderAvatar = () => (
     <div className="flex flex-col items-center gap-1 shrink-0">
       <UnifiedAvatar
@@ -496,6 +601,8 @@ const PurePreviewMessage = ({
         id={avatarSeed}
         isAgent={avatarInfo.isAgent}
         size={8}
+        showStatus={!avatarInfo.isAgent && !isLocalUser}
+        isOnline={userOnlineStatus}
       />
       <span className="text-muted-foreground text-xs max-w-[3rem] truncate text-center">
         {senderName}

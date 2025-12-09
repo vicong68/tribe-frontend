@@ -46,6 +46,11 @@ const nextConfig: NextConfig = {
   
   // 优化：启用 React 严格模式，帮助发现潜在问题
   reactStrictMode: true,
+  
+  // 配置 Server Actions body size limit（支持大文件上传，最大 100MB）
+  serverActions: {
+    bodySizeLimit: "100mb",
+  },
 };
 
 export default nextConfig;

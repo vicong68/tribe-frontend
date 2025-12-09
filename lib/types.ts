@@ -63,4 +63,6 @@ export type Attachment = {
   name: string;
   url: string;
   contentType: string;
+  size?: number; // 文件大小（字节）
+  fileId?: string; // 文件唯一标识
 };

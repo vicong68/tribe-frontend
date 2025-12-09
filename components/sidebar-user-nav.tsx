@@ -71,6 +71,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                   id={getBackendMemberId(user)}
                   isAgent={false}
                   size={8}
+                  showStatus={false}
                 />
               ) : (
                 <UserIcon className="h-5 w-5" />

@@ -9,6 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
+import { StarFilledIcon, StarIcon } from "./icons";
+import { toast } from "sonner";
+import { Button } from "./ui/button";
 
 interface CollectionItem {
   id: string;
@@ -69,6 +72,33 @@ export function CollectionsList() {
       return timeB - timeA;
     });
   }, [collections]);
+
+  // 删除收藏项（取消收藏）
+  const handleDeleteCollection = async (collectionId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // 阻止点击事件冒泡到父元素
+
+    if (!userId) {
+      toast.error("请先登录！");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/collections?id=${encodeURIComponent(collectionId)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!response.ok) {
+        throw new Error("删除失败");
+      }
+
+      toast.success("已删除");
+      // 更新收藏列表
+      mutate();
+    } catch (error) {
+      toast.error("删除失败，请稍后重试");
+    }
+  };
   
   // ✅ 关键修复：条件返回必须在所有 hooks 调用之后
   // 在服务器端和客户端初始渲染时，都返回相同的占位符，避免 hydration 不匹配
@@ -77,7 +107,7 @@ export function CollectionsList() {
   // 客户端 hydration 完成后，mounted 变为 true，再渲染完整组件
   if (!mounted) {
     return (
-      <div className="text-sm text-muted-foreground text-center py-4">
+      <div className="text-xs text-muted-foreground text-center py-2 px-1.5">
         请先登录以查看收藏
       </div>
     );
@@ -85,7 +115,7 @@ export function CollectionsList() {
 
   if (!isLoggedIn || !userId) {
     return (
-      <div className="text-sm text-muted-foreground text-center py-4">
+      <div className="text-xs text-muted-foreground text-center py-2 px-1.5">
         请先登录以查看收藏
       </div>
     );
@@ -93,10 +123,10 @@ export function CollectionsList() {
 
   if (isLoading) {
     return (
-      <ScrollArea className="flex-1">
-        <div className="space-y-2">
+      <ScrollArea className="flex-1 h-full w-full">
+        <div className="space-y-1 px-1.5">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-16 w-full" />
+            <Skeleton key={i} className="h-12 w-full" />
           ))}
         </div>
       </ScrollArea>
@@ -105,41 +135,43 @@ export function CollectionsList() {
 
   if (!sortedCollections || sortedCollections.length === 0) {
     return (
-      <div className="text-sm text-muted-foreground text-center py-4">
+      <div className="text-xs text-muted-foreground text-center py-2 px-1.5">
         暂无收藏消息
       </div>
     );
   }
 
   return (
-    <ScrollArea className="flex-1">
-      <div className="space-y-2">
+    <ScrollArea className="flex-1 h-full w-full">
+      <div className="space-y-0 px-1 pb-1">
         {sortedCollections.map((item) => (
           <div
             key={item.id}
             className={cn(
-              "p-2 rounded-md border border-sidebar-border bg-background hover:bg-accent transition-colors cursor-pointer",
-              "text-sm"
+              "p-1 rounded-sm border border-sidebar-border bg-background hover:bg-accent transition-colors cursor-pointer",
+              "text-[11px] relative group w-full"
             )}
             onClick={() => {
               // TODO: 实现点击收藏项后嵌入到当前对话上下文
               console.log("点击收藏项:", item);
             }}
           >
-            <div className="flex items-start justify-between gap-2 mb-1">
-              <span className={cn(
-                "text-xs font-medium",
-                item.message_role === "user" ? "text-blue-600" : "text-green-600"
-              )}>
+            <div className="flex items-start justify-between gap-1 mb-0.5 min-w-0">
+              <span
+                className={cn(
+                  "text-[10px] font-medium truncate flex-1 min-w-0",
+                  item.message_role === "user" ? "text-blue-600" : "text-green-600"
+                )}
+              >
                 {/* 显示具体名称，如果没有则显示默认值 */}
                 {item.sender_name || (item.message_role === "user" ? "用户" : "智能体")}
               </span>
-              <span className="text-xs text-muted-foreground">
-                {format(new Date(item.created_at), "MM-dd HH:mm", { locale: zhCN })}
-              </span>
             </div>
-            <div className="text-xs text-foreground line-clamp-2">
+            <div className="text-[10px] text-foreground line-clamp-2 leading-tight break-words w-full">
               {item.message_content}
+            </div>
+            <div className="text-[9px] text-muted-foreground mt-0.5">
+              {format(new Date(item.created_at), "MM-dd HH:mm", { locale: zhCN })}
             </div>
           </div>
         ))}

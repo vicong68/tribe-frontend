@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 
@@ -50,7 +50,99 @@ export function useOfflineMessages({
   onOfflineMessagesFetched?: () => void; // 新增：离线消息拉取完成后的回调
 }) {
   const fetchedRef = useRef(false);
+  const attemptsRef = useRef(0);
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
+  const MAX_ATTEMPTS = 3;
+
+  const fetchOfflineMessages = useCallback(async (): Promise<boolean> => {
+    if (!isLoggedIn || !userId) {
+      return false;
+    }
+
+    attemptsRef.current += 1;
+
+    try {
+      const response = await fetch(
+        `/api/sse/offline_messages?user_id=${encodeURIComponent(userId)}&timeout=5&wait_interval=1`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          signal: AbortSignal.timeout(10000), // 10秒超时
+        }
+      );
+
+      if (!response.ok) {
+        if (process.env.NODE_ENV === "development") {
+          const errorText = await response.text().catch(() => "");
+          console.warn("[OfflineMessages] 拉取离线消息失败:", response.status, errorText);
+        }
+        if (onOfflineMessagesFetched) {
+          onOfflineMessagesFetched();
+        }
+        return false;
+      }
+
+      const data = (await response.json()) as OfflineMessagesResponse;
+      const offlineMessages = data.offline_messages || [];
+
+      if (onOfflineMessagesFetched) {
+        onOfflineMessagesFetched();
+      }
+
+      if (offlineMessages.length === 0) {
+        return true;
+      }
+
+      const chatMessages: ChatMessage[] = offlineMessages.map((msg) => {
+        const parts: any[] = [];
+
+        if (msg.file_attachment) {
+          parts.push({
+            type: "file" as const,
+            url: msg.file_attachment.download_url || msg.file_attachment.file_id,
+            name: msg.file_attachment.file_name || "file",
+            mediaType: msg.file_attachment.file_type || "application/octet-stream",
+          });
+        }
+
+        if (msg.body && msg.body !== "[FILE_TRANSFER]") {
+          parts.push({
+            type: "text" as const,
+            text: msg.body,
+          });
+        }
+
+        return {
+          id: generateUUID(),
+          role: "assistant",
+          parts,
+          metadata: {
+            createdAt: msg.created_at || new Date().toISOString(),
+            senderId: msg.sender_id,
+            senderName: msg.sender_nickname || msg.sender_id,
+            receiverId: userId,
+            communicationType: "user_user",
+          },
+        };
+      });
+
+      onMessages(chatMessages);
+      if (onOfflineMessagesFetched) {
+        onOfflineMessagesFetched();
+      }
+      return true;
+    } catch (error) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[OfflineMessages] 拉取离线消息异常:", error);
+      }
+      if (onOfflineMessagesFetched) {
+        onOfflineMessagesFetched();
+      }
+      return false;
+    }
+  }, [isLoggedIn, userId, onMessages, onOfflineMessagesFetched]);
 
   useEffect(() => {
     // 只在登录用户、连接建立后且未拉取过时执行
@@ -59,119 +151,47 @@ export function useOfflineMessages({
       return;
     }
 
-    // 标记为已拉取，避免重复拉取
-    fetchedRef.current = true;
-
-    // 异步拉取离线消息
-    const fetchOfflineMessages = async () => {
-      try {
-        // 使用前端 API 路由代理
-        const response = await fetch(
-          `/api/sse/offline_messages?user_id=${encodeURIComponent(userId)}&timeout=5&wait_interval=1`,
-          {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            signal: AbortSignal.timeout(10000), // 10秒超时
-          }
-        );
-
-        if (!response.ok) {
-          // 记录错误信息，便于调试
-          if (process.env.NODE_ENV === "development") {
-            const errorText = await response.text().catch(() => "");
-            console.warn("[OfflineMessages] 拉取离线消息失败:", response.status, errorText);
-          }
-          // 即使失败也触发回调，确保用户列表能拉取
-          if (onOfflineMessagesFetched) {
-            onOfflineMessagesFetched();
-          }
-          return;
-        }
-
-        const data = (await response.json()) as OfflineMessagesResponse;
-        const offlineMessages = data.offline_messages || [];
-
-        // 离线消息拉取完成，无论是否有消息都触发回调
-        // 这样即使没有离线消息，也能确保用户列表和状态拉取
-        if (onOfflineMessagesFetched) {
-          onOfflineMessagesFetched();
-        }
-
-        if (offlineMessages.length === 0) {
-          // 没有离线消息，直接返回（功能已完成，可以关闭）
-          return;
-        }
-
-        // 转换为 ChatMessage 格式
-        const chatMessages: ChatMessage[] = offlineMessages.map((msg) => {
-          const parts: any[] = [];
-
-          // 添加文件附件（如果有）
-          if (msg.file_attachment) {
-            parts.push({
-              type: "file" as const,
-              url: msg.file_attachment.download_url || msg.file_attachment.file_id,
-              name: msg.file_attachment.file_name || "file",
-              mediaType: msg.file_attachment.file_type || "application/octet-stream",
-            });
-          }
-
-          // 添加文本内容（如果有）
-          if (msg.body && msg.body !== "[FILE_TRANSFER]") {
-            parts.push({
-              type: "text" as const,
-              text: msg.body,
-            });
-          }
-
-          return {
-            id: generateUUID(),
-            role: "assistant",
-            parts,
-            metadata: {
-              createdAt: msg.created_at || new Date().toISOString(),
-              senderId: msg.sender_id,
-              senderName: msg.sender_nickname || msg.sender_id,
-              receiverId: userId,
-              communicationType: "user_user",
-            },
-          };
-        });
-
-        // 通知调用者处理消息
-        onMessages(chatMessages);
-        
-        // 离线消息拉取完成（已在上面触发，这里确保触发）
-        // 注意：离线消息拉取是一次性的，完成后功能可以关闭
-        if (onOfflineMessagesFetched) {
-          onOfflineMessagesFetched();
-        }
-      } catch (error) {
-        // 静默处理错误，不影响用户体验
-        if (process.env.NODE_ENV === "development") {
-          console.warn("[OfflineMessages] 拉取离线消息异常:", error);
-        }
-        // 即使出错也触发回调，确保用户列表能拉取
-        if (onOfflineMessagesFetched) {
-          onOfflineMessagesFetched();
-        }
-      }
-    };
-
     // 延迟拉取，确保 SSE 连接完全建立
-    const timeoutId = setTimeout(fetchOfflineMessages, 1000);
+    const timeoutId = setTimeout(async () => {
+      if (fetchedRef.current) return;
+      const success = await fetchOfflineMessages();
+      if (success || attemptsRef.current >= MAX_ATTEMPTS) {
+        fetchedRef.current = true;
+      }
+    }, 1000);
 
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [userId, isLoggedIn, isConnected, onMessages]);
+  }, [userId, isLoggedIn, isConnected, fetchOfflineMessages]);
+
+  // 登录但 SSE 未连上时的兜底轮询（有限次数）
+  useEffect(() => {
+    if (!isLoggedIn || !userId || fetchedRef.current || isConnected) {
+      return;
+    }
+
+    const intervalId = setInterval(async () => {
+      if (fetchedRef.current) {
+        clearInterval(intervalId);
+        return;
+      }
+
+      const success = await fetchOfflineMessages();
+      if (success || attemptsRef.current >= MAX_ATTEMPTS) {
+        fetchedRef.current = true;
+        clearInterval(intervalId);
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [isLoggedIn, userId, isConnected, fetchOfflineMessages]);
 
   // 当连接断开或用户登出时，重置拉取标记，以便重连或重新登录后再次拉取
   useEffect(() => {
     if (!isConnected || !isLoggedIn) {
       fetchedRef.current = false;
+      attemptsRef.current = 0;
     }
   }, [isConnected, isLoggedIn]);
 }

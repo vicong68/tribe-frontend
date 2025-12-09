@@ -21,10 +21,25 @@ function createFileSchema() {
           message: `File size should be less than ${Math.round(config.maxFileSize / 1024 / 1024)}MB`,
         }
       )
+      // 放宽文件类型限制：允许所有类型，由后端验证和处理
+      // 前端仅做基本的大小验证，具体文件类型支持由后端决定
+      // 注意：后端会根据Agent能力决定是否处理文件内容
       .refine(
-        (file) => config.allowedMimeTypes.includes(file.type),
+        (file) => {
+          // 如果配置中包含 application/octet-stream，则允许所有类型
+          if (config.allowedMimeTypes.includes("application/octet-stream")) {
+            return true;
+          }
+          // 如果文件类型为空或未知，也允许（由后端处理）
+          if (!file.type || file.type === "application/octet-stream") {
+            return true;
+          }
+          // 检查是否在允许列表中
+          return config.allowedMimeTypes.length === 0 || 
+                 config.allowedMimeTypes.includes(file.type);
+        },
         {
-          message: `File type should be one of: ${config.allowedMimeTypes.join(", ")}`,
+          message: `File type not allowed. Allowed types: ${config.allowedMimeTypes.join(", ")}`,
         }
       ),
   });
@@ -93,9 +108,18 @@ export async function POST(request: Request) {
       console.log("[FileUpload] ✅ File uploaded successfully:", {
         url: data.url,
         pathname: data.pathname,
+        size: data.size,
+        fileId: data.fileId,
       });
 
-      return NextResponse.json(data);
+      // 返回完整元数据，包含size和fileId
+      return NextResponse.json({
+        url: data.url,
+        pathname: data.pathname,
+        contentType: data.contentType,
+        size: data.size,
+        fileId: data.fileId,
+      });
     } catch (error) {
       // 改进的错误处理和日志记录
       const errorMessage = error instanceof Error ? error.message : "Unknown error";

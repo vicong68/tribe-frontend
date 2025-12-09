@@ -343,14 +343,38 @@ export async function POST(request: Request) {
     const messageContent = getTextFromMessage(message);
     
     // 提取文件附件信息（仅在需要时提取）
+    // 从attachments中获取完整元数据（包含size和fileId）
     const messageParts = message.parts || [];
     const fileParts = messageParts.filter((part) => part.type === "file");
-    const fileAttachment = fileParts.length > 0 ? {
-      file_id: (fileParts[0] as any).url, // 使用URL作为file_id
-      download_url: (fileParts[0] as any).url,
-      file_name: (fileParts[0] as any).name || "file",
-      file_type: (fileParts[0] as any).mediaType || "application/octet-stream",
-    } : undefined;
+    
+    // 从attachments中查找对应的文件信息（通过url匹配）
+    let fileAttachment = undefined;
+    if (fileParts.length > 0) {
+      const filePart = fileParts[0] as any;
+      
+      // 提取文件信息，提供默认值增强容错性
+      const fileUrl = filePart.url || "";
+      const fileName = filePart.name || "file";
+      const fileMediaType = filePart.mediaType || "application/octet-stream";
+      const fileSize = filePart.size || 0;
+      
+      // 从URL或fileId中提取fileId（优先使用fileId字段）
+      const fileId = filePart.fileId || filePart.url || fileUrl;
+      
+      // 验证必需字段
+      if (!fileId && !fileUrl) {
+        console.error("[chat/route] ⚠️  文件附件缺少 file_id 和 url，跳过文件处理");
+      } else {
+        // 构建符合后端ChatFileAttachment格式的对象
+        fileAttachment = {
+          filename: fileName, // 使用filename而非file_name
+          size: fileSize, // 添加size字段，如果缺失则使用0（后端会从文件系统获取）
+          file_type: fileMediaType,
+          file_id: fileId || fileUrl, // 如果fileId为空，使用url
+          download_url: fileUrl || fileId, // 如果url为空，使用fileId
+        };
+      }
+    }
 
     // 构建历史消息（转换为后端格式）
     // 仅在存在历史消息时进行转换（避免不必要的操作）
@@ -363,7 +387,7 @@ export async function POST(request: Request) {
         }))
       : [];
 
-    // 添加当前用户消息
+    // 添加当前用户消息（包含parts信息，用于文件附件）
     const allMessages = [
       ...historyMessages,
       {
@@ -371,6 +395,8 @@ export async function POST(request: Request) {
         content: messageContent,
         // 将前端生成的 metadata 一并传给后端，便于在流式响应中透传（包括 agent/id 路由信息）
         metadata: userMessageMetadata,
+        // 包含parts信息（用于文件附件，后端会从parts中提取文件信息）
+        parts: message.parts,
       },
     ];
 

@@ -152,24 +152,29 @@ export async function DELETE(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const collectionId = searchParams.get("id");
+    const messageId = searchParams.get("message_id");
 
-    if (!collectionId) {
+    if (!collectionId && !messageId) {
       return NextResponse.json(
-        { error: "缺少收藏ID" },
+        { error: "缺少收藏ID或消息ID" },
         { status: 400 }
       );
     }
 
     // 调用后端 API 删除收藏
-    const response = await fetch(
-      `${BACKEND_URL}/api/collections?id=${encodeURIComponent(collectionId)}&user_id=${encodeURIComponent(userId)}`,
-      {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    let url = `${BACKEND_URL}/api/collections?user_id=${encodeURIComponent(userId)}`;
+    if (messageId) {
+      url += `&message_id=${encodeURIComponent(messageId)}`;
+    } else if (collectionId) {
+      url += `&id=${encodeURIComponent(collectionId)}`;
+    }
+    
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
 
     if (!response.ok) {
       throw new Error("删除收藏失败");

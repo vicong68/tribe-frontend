@@ -1,9 +1,8 @@
 import equal from "fast-deep-equal";
-import { memo, useState } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { useCopyToClipboard } from "usehooks-ts";
-import { Star, MoreVertical } from "lucide-react";
 import { useSession } from "next-auth/react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -11,7 +10,8 @@ import { cn, generateUUID } from "@/lib/utils";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useChatModels } from "@/lib/ai/models-client";
 import { Action, Actions } from "./elements/actions";
-import { CopyIcon, PencilEditIcon, ThumbDownIcon, ThumbUpIcon, ShareIcon, MoreIcon, TrashIcon } from "./icons";
+import { CopyIcon, PencilEditIcon, ThumbDownIcon, ThumbUpIcon, ShareIcon, TrashIcon, StarIcon, StarFilledIcon, MoreIcon } from "./icons";
+import useSWR from "swr";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +44,42 @@ export function PureMessageActions({
   const { data: session } = useSession();
   const isLoggedIn = session?.user?.type === "regular";
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const [showMoreActionsLeft, setShowMoreActionsLeft] = useState(false);
+  const [showMoreActionsRight, setShowMoreActionsRight] = useState(false);
+  const moreActionsLeftRef = useRef<HTMLDivElement>(null);
+  const moreActionsRightRef = useRef<HTMLDivElement>(null);
+  
+  // 点击外部区域关闭更多操作（左侧）
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (moreActionsLeftRef.current && !moreActionsLeftRef.current.contains(event.target as Node)) {
+        setShowMoreActionsLeft(false);
+      }
+    };
+
+    if (showMoreActionsLeft) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+      };
+    }
+  }, [showMoreActionsLeft]);
+
+  // 点击外部区域关闭更多操作（右侧）
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (moreActionsRightRef.current && !moreActionsRightRef.current.contains(event.target as Node)) {
+        setShowMoreActionsRight(false);
+      }
+    };
+
+    if (showMoreActionsRight) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+      };
+    }
+  }, [showMoreActionsRight]);
   
   // 获取用户列表（用于分享）
   const { models: chatModels } = useChatModels(isLoggedIn, 0);
@@ -54,6 +90,27 @@ export function PureMessageActions({
     const modelMemberId = model.id.replace(/^user::/, "");
     return model.id !== `user::${currentUserId}` && modelMemberId !== currentUserId;
   });
+
+  // 检查消息是否已收藏
+  const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
+  const { data: collectionStatus } = useSWR<{ is_collected: boolean; collection: any }>(
+    isLoggedIn && currentUserId && message.id
+      ? `/api/collections/check?message_id=${encodeURIComponent(message.id)}`
+      : null,
+    async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) {
+        return { is_collected: false, collection: null };
+      }
+      return response.json();
+    },
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    }
+  );
+  
+  const isCollected = collectionStatus?.is_collected ?? false;
 
   if (isLoading) {
     return null;
@@ -140,9 +197,11 @@ export function PureMessageActions({
           ],
           metadata: {
             ...message.metadata,
-            isSharedMessage: true, // 标记为分享消息
-            sharedTo: targetUserId,
-            sharedToName: targetUserName,
+            ...({
+              isSharedMessage: true, // 标记为分享消息
+              sharedTo: targetUserId,
+              sharedToName: targetUserName,
+            } as any),
           },
         };
         return [...prevMessages, displayMessage];
@@ -219,19 +278,44 @@ export function PureMessageActions({
     }
   };
 
-  // 收藏功能：将消息添加到收藏夹
+  // 收藏功能：切换收藏状态（添加/取消收藏）
   const handleFavorite = async () => {
     if (!textFromParts) {
       toast.error("没有可收藏的内容！");
       return;
     }
 
-    const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
     if (!currentUserId) {
       toast.error("请先登录！");
       return;
     }
 
+    // 如果已收藏，则取消收藏
+    if (isCollected) {
+      try {
+        const response = await fetch(
+          `/api/collections?message_id=${encodeURIComponent(message.id)}`,
+          {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("取消收藏失败");
+        }
+
+        toast.success("已取消收藏");
+        // 触发收藏状态和收藏夹列表更新
+        mutate(`/api/collections/check?message_id=${encodeURIComponent(message.id)}`);
+        mutate("/api/collections");
+      } catch (error) {
+        toast.error("取消收藏失败，请稍后重试");
+      }
+      return;
+    }
+
+    // 如果未收藏，则添加收藏
     // 获取发送者名称（从metadata中获取，确保显示具体名称）
     const metadata = message.metadata || {};
     let senderName: string;
@@ -261,7 +345,8 @@ export function PureMessageActions({
       }
 
       toast.success("已收藏");
-      // 触发收藏夹列表更新
+      // 触发收藏状态和收藏夹列表更新
+      mutate(`/api/collections/check?message_id=${encodeURIComponent(message.id)}`);
       mutate("/api/collections");
     } catch (error) {
       toast.error("收藏失败，请稍后重试");
@@ -321,102 +406,182 @@ export function PureMessageActions({
     <Actions className={cn(
       isUser ? "justify-end" : "justify-start"
     )}>
-      {/* 智能体消息：复制、编辑 */}
+      {/* 左侧：智能体/远端用户消息 */}
       {!isUser && (
         <>
-      {setMode && (
-        <Action
+          {/* 编辑按钮 */}
+          {setMode && (
+            <Action
               className={actionButtonClass}
-          data-testid="message-edit-button"
-          onClick={() => setMode("edit")}
-          tooltip="编辑"
-        >
-          <PencilEditIcon />
-        </Action>
-      )}
-          <Action 
+              data-testid="message-edit-button"
+              onClick={() => setMode("edit")}
+              tooltip="编辑"
+            >
+              <PencilEditIcon />
+            </Action>
+          )}
+          
+          {/* 收藏按钮 */}
+          <Action
             className={actionButtonClass}
-            onClick={handleCopy} 
-            tooltip="复制"
+            onClick={handleFavorite}
+            tooltip={isCollected ? "取消收藏" : "收藏"}
           >
-        <CopyIcon />
-      </Action>
+            {isCollected ? <StarFilledIcon /> : <StarIcon />}
+          </Action>
+
+          {/* 分享按钮 */}
+          <DropdownMenu open={showShareMenu} onOpenChange={setShowShareMenu}>
+            <DropdownMenuTrigger asChild>
+              <Action
+                className={actionButtonClass}
+                tooltip="分享"
+              >
+                <ShareIcon />
+              </Action>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent 
+              align="start"
+              className="max-h-[300px] overflow-y-auto z-[70]"
+            >
+              {availableUsers.length === 0 ? (
+                <DropdownMenuItem disabled>
+                  暂无可分享的用户
+                </DropdownMenuItem>
+              ) : (
+                availableUsers.map((user) => (
+                  <DropdownMenuItem
+                    key={user.id}
+                    onClick={() => {
+                      const userId = user.id.replace(/^user::/, "");
+                      handleShare(userId, user.name);
+                    }}
+                  >
+                    {user.name}
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* 更多操作：复制、删除 */}
+          <div className="relative" ref={moreActionsLeftRef}>
+            <Action
+              className={actionButtonClass}
+              onClick={() => setShowMoreActionsLeft(!showMoreActionsLeft)}
+              tooltip="更多操作"
+            >
+              <MoreIcon />
+            </Action>
+            {showMoreActionsLeft && (
+              <div className="absolute top-full left-0 mt-1 flex gap-1 bg-background rounded-md p-1 shadow-lg z-[70]">
+                <Action
+                  className={actionButtonClass}
+                  onClick={() => {
+                    handleCopy();
+                    setShowMoreActionsLeft(false);
+                  }}
+                  tooltip="复制"
+                >
+                  <CopyIcon />
+                </Action>
+                <Action
+                  className={cn(actionButtonClass, "text-destructive")}
+                  onClick={() => {
+                    handleDelete();
+                    setShowMoreActionsLeft(false);
+                  }}
+                  tooltip="删除"
+                >
+                  <TrashIcon />
+                </Action>
+              </div>
+            )}
+          </div>
         </>
       )}
 
-      {/* 本地用户消息：补充复制功能（与左侧一致） */}
+      {/* 右侧：本地用户消息 */}
       {isUser && (
-        <Action
-          className={actionButtonClass}
-          onClick={handleCopy}
-          tooltip="复制"
-        >
-          <CopyIcon />
-        </Action>
+        <>
+          {/* 复制按钮 */}
+          <Action
+            className={actionButtonClass}
+            onClick={handleCopy}
+            tooltip="复制"
+          >
+            <CopyIcon />
+          </Action>
+
+          {/* 收藏按钮 */}
+          <Action
+            className={actionButtonClass}
+            onClick={handleFavorite}
+            tooltip={isCollected ? "取消收藏" : "收藏"}
+          >
+            {isCollected ? <StarFilledIcon /> : <StarIcon />}
+          </Action>
+
+          {/* 更多操作：分享、删除 */}
+          <div className="relative" ref={moreActionsRightRef}>
+            <Action
+              className={actionButtonClass}
+              onClick={() => setShowMoreActionsRight(!showMoreActionsRight)}
+              tooltip="更多操作"
+            >
+              <MoreIcon />
+            </Action>
+            {showMoreActionsRight && (
+              <div className="absolute top-full right-0 mt-1 flex gap-1 bg-background rounded-md p-1 shadow-lg z-[70]">
+                {/* 分享按钮 */}
+                <DropdownMenu open={showShareMenu} onOpenChange={setShowShareMenu}>
+                  <DropdownMenuTrigger asChild>
+                    <Action
+                      className={actionButtonClass}
+                      tooltip="分享"
+                    >
+                      <ShareIcon />
+                    </Action>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent 
+                    align="end"
+                    className="max-h-[300px] overflow-y-auto z-[80]"
+                  >
+                    {availableUsers.length === 0 ? (
+                      <DropdownMenuItem disabled>
+                        暂无可分享的用户
+                      </DropdownMenuItem>
+                    ) : (
+                      availableUsers.map((user) => (
+                        <DropdownMenuItem
+                          key={user.id}
+                          onClick={() => {
+                            const userId = user.id.replace(/^user::/, "");
+                            handleShare(userId, user.name);
+                            setShowMoreActionsRight(false);
+                          }}
+                        >
+                          {user.name}
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Action
+                  className={cn(actionButtonClass, "text-destructive")}
+                  onClick={() => {
+                    handleDelete();
+                    setShowMoreActionsRight(false);
+                  }}
+                  tooltip="删除"
+                >
+                  <TrashIcon />
+                </Action>
+              </div>
+            )}
+          </div>
+        </>
       )}
-
-      {/* 分享按钮：所有消息都支持 */}
-      <DropdownMenu open={showShareMenu} onOpenChange={setShowShareMenu}>
-        <DropdownMenuTrigger asChild>
-          <Action
-            className={actionButtonClass}
-            tooltip="分享"
-          >
-            <ShareIcon />
-          </Action>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent 
-          align={isUser ? "end" : "start"}
-          className="max-h-[300px] overflow-y-auto z-[70]"
-        >
-          {availableUsers.length === 0 ? (
-            <DropdownMenuItem disabled>
-              暂无可分享的用户
-            </DropdownMenuItem>
-          ) : (
-            availableUsers.map((user) => (
-              <DropdownMenuItem
-                key={user.id}
-                onClick={() => {
-                  const userId = user.id.replace(/^user::/, "");
-                  handleShare(userId, user.name);
-                }}
-              >
-                {user.name}
-              </DropdownMenuItem>
-            ))
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      {/* 更多操作下拉菜单 */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Action
-            className={actionButtonClass}
-            tooltip="更多操作"
-          >
-            <MoreIcon />
-          </Action>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent 
-          align={isUser ? "end" : "start"}
-          className="z-[70]"
-        >
-          <DropdownMenuItem onClick={handleFavorite}>
-            <Star className="h-4 w-4" />
-            <span className="ml-2">收藏</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem 
-            className="text-destructive"
-            onClick={handleDelete}
-          >
-            <TrashIcon />
-            <span className="ml-2">删除</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
 
       {/* 仅assistant消息显示赞/踩 */}
       {message.role === "assistant" && (
