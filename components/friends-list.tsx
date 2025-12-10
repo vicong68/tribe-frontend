@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { ScrollArea } from "./ui/scroll-area";
 import { Skeleton } from "./ui/skeleton";
 import { Separator } from "./ui/separator";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { FriendManager } from "./friend-manager";
 import { UnifiedAvatar } from "./unified-avatar";
 
@@ -183,9 +184,10 @@ export function FriendsList() {
                   智能体
                 </div>
                 {agentsWithAvatars.map((model) => {
-                  return (
+                  const hasDescription = model.description && model.description.trim().length > 0;
+                  
+                  const agentItem = (
                     <div
-                      key={model.id}
                       className={cn(
                         "flex items-center gap-3 px-2 py-2 rounded-lg",
                         "hover:bg-sidebar-accent cursor-pointer transition-colors"
@@ -207,6 +209,32 @@ export function FriendsList() {
                       </div>
                     </div>
                   );
+
+                  // 如果有介绍，使用 Tooltip 包裹
+                  if (hasDescription) {
+                    return (
+                      <TooltipProvider key={model.id} delayDuration={300}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            {agentItem}
+                          </TooltipTrigger>
+                          <TooltipContent
+                            side="right"
+                            className="max-w-[280px] p-3 text-sm leading-relaxed"
+                            sideOffset={8}
+                          >
+                            <div className="font-medium mb-1.5">{model.name}</div>
+                            <div className="text-muted-foreground whitespace-pre-wrap break-words">
+                              {model.description}
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    );
+                  }
+
+                  // 没有介绍，直接返回
+                  return <div key={model.id}>{agentItem}</div>;
                 })}
               </div>
             )}

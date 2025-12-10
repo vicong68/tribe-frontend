@@ -51,12 +51,11 @@ export function ModelSelector({
     }, []),
   });
 
-  const { availableChatModelIds } = entitlementsByUserType[userType];
-
   // 分离 agents 和 users
+  // 统一使用好友列表的逻辑：显示所有agents（包括动态智能体），不进行权限过滤
+  // 权限过滤应该在发送消息时进行，而不是在显示列表时
   const availableAgents = chatModels.filter((chatModel) => {
-    if (chatModel.type === "user") return false;
-    return availableChatModelIds.includes(chatModel.id);
+    return chatModel.type === "agent";
   });
 
   const availableUsers = chatModels.filter((chatModel) => {
@@ -136,46 +135,50 @@ export function ModelSelector({
         )}
       >
         <Button
-          className="md:h-[34px] md:px-2"
+          className="h-9 px-3 gap-2"
           data-testid="model-selector"
           variant="outline"
         >
           {selectedChatModel && (
-            <div className="mr-2 shrink-0">
-              <UnifiedAvatar
-                name={selectedChatModel.name}
-                id={selectedChatModel.id}
-                isAgent={selectedChatModel.avatar.isAgent}
-                size={5}
-                showStatus={selectedChatModel.type === "user" && !isSelectedCurrentUser}
-                isOnline={selectedChatModel.type === "user" ? selectedChatModel.isOnline : undefined}
-              />
-            </div>
+            <UnifiedAvatar
+              name={selectedChatModel.name}
+              id={selectedChatModel.id}
+              isAgent={selectedChatModel.avatar.isAgent}
+              size={5}
+              showStatus={selectedChatModel.type === "user" && !isSelectedCurrentUser}
+              isOnline={selectedChatModel.type === "user" ? selectedChatModel.isOnline : undefined}
+            />
           )}
-          {selectedChatModel?.name}
-          <ChevronDownIcon />
+          <span className="text-sm font-medium truncate max-w-[120px] sm:max-w-[160px]">
+            {selectedChatModel?.name || "选择收信方"}
+          </span>
+          <ChevronDownIcon className="size-4 shrink-0" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="min-w-[280px] max-w-[90vw] sm:min-w-[300px]"
+        className="min-w-[240px] max-w-[90vw] sm:min-w-[260px] max-h-[70vh] overflow-y-auto"
       >
+        {/* 智能体分组 */}
         {availableAgents.length > 0 && (
           <>
+            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              智能体
+            </div>
             {modelsWithAvatars
               .filter((m) => m.type === "agent")
               .map((chatModel) => {
                 const { id } = chatModel;
+                const isSelected = id === optimisticModelId;
 
                 return (
                   <DropdownMenuItem
                     asChild
-                    data-active={id === optimisticModelId}
+                    data-active={isSelected}
                     data-testid={`model-selector-item-${id}`}
                     key={id}
                     onSelect={() => {
                       setOpen(false);
-
                       startTransition(() => {
                         setOptimisticModelId(id);
                         saveChatModelAsCookie(id);
@@ -183,29 +186,28 @@ export function ModelSelector({
                     }}
                   >
                     <button
-                      className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
+                      className={cn(
+                        "group/item flex w-full flex-row items-center justify-between gap-2 px-2 py-1.5 rounded-sm",
+                        "hover:bg-accent transition-colors",
+                        isSelected && "bg-accent"
+                      )}
                       type="button"
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         <UnifiedAvatar
                           name={chatModel.name}
                           id={chatModel.id}
                           isAgent={true}
                           size={6}
                         />
-                        <div className="flex flex-col items-start gap-1">
-                          <div className="text-sm sm:text-base">{chatModel.name}</div>
-                          {chatModel.description && (
-                            <div className="line-clamp-2 text-muted-foreground text-xs">
-                              {chatModel.description}
-                            </div>
-                          )}
-                        </div>
+                        <div className="text-sm truncate">{chatModel.name}</div>
                       </div>
 
-                      <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
-                        <CheckCircleFillIcon />
-                      </div>
+                      {isSelected && (
+                        <div className="shrink-0 text-foreground">
+                          <CheckCircleFillIcon className="size-4" />
+                        </div>
+                      )}
                     </button>
                   </DropdownMenuItem>
                 );
@@ -213,13 +215,20 @@ export function ModelSelector({
           </>
         )}
         
+        {/* 用户分组 */}
         {availableUsers.length > 0 && (
           <>
-            {availableAgents.length > 0 && <DropdownMenuSeparator />}
+            {availableAgents.length > 0 && (
+              <DropdownMenuSeparator className="my-1" />
+            )}
+            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              用户
+            </div>
             {modelsWithAvatars
               .filter((m) => m.type === "user")
               .map((chatModel) => {
                 const { id } = chatModel;
+                const isSelected = id === optimisticModelId;
                 
                 // 判断是否是当前用户（本地用户不显示状态）
                 const isModelCurrentUser = (() => {
@@ -233,12 +242,11 @@ export function ModelSelector({
                 return (
                   <DropdownMenuItem
                     asChild
-                    data-active={id === optimisticModelId}
+                    data-active={isSelected}
                     data-testid={`model-selector-item-${id}`}
                     key={id}
                     onSelect={() => {
                       setOpen(false);
-
                       startTransition(() => {
                         setOptimisticModelId(id);
                         saveChatModelAsCookie(id);
@@ -246,10 +254,14 @@ export function ModelSelector({
                     }}
                   >
                     <button
-                      className="group/item flex w-full flex-row items-center justify-between gap-2 sm:gap-4"
+                      className={cn(
+                        "group/item flex w-full flex-row items-center justify-between gap-2 px-2 py-1.5 rounded-sm",
+                        "hover:bg-accent transition-colors",
+                        isSelected && "bg-accent"
+                      )}
                       type="button"
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         <UnifiedAvatar
                           name={chatModel.name}
                           id={chatModel.id}
@@ -258,17 +270,14 @@ export function ModelSelector({
                           showStatus={!isModelCurrentUser}
                           isOnline={chatModel.isOnline}
                         />
-                        <div className="flex flex-col items-start gap-1">
-                          <div className="text-sm sm:text-base">{chatModel.name}</div>
-                          <div className="line-clamp-2 text-muted-foreground text-xs">
-                            用户
-                          </div>
-                        </div>
+                        <div className="text-sm truncate">{chatModel.name}</div>
                       </div>
 
-                      <div className="shrink-0 text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
-                        <CheckCircleFillIcon />
-                      </div>
+                      {isSelected && (
+                        <div className="shrink-0 text-foreground">
+                          <CheckCircleFillIcon className="size-4" />
+                        </div>
+                      )}
                     </button>
                   </DropdownMenuItem>
                 );

@@ -306,16 +306,50 @@ export function Chat({
       }
 
       // 检查消息是否已经存在（避免重复添加）
-      const existingMessage = messages.find(
-        (msg) =>
-          msg.metadata?.senderId === sseMessage.sender_id &&
-          msg.metadata?.receiverId === sseMessage.receiver_id &&
-          msg.role === "assistant" &&
-          msg.metadata?.communicationType === "user_user" &&
-          (msg.parts?.[0] as any)?.text === sseMessage.content
-      );
+      // 改进：同时检查文本内容和文件附件，确保正确去重
+      const existingMessage = messages.find((msg) => {
+        // 检查基本字段匹配
+        if (
+          msg.metadata?.senderId !== sseMessage.sender_id ||
+          msg.metadata?.receiverId !== sseMessage.receiver_id ||
+          msg.role !== "assistant" ||
+          msg.metadata?.communicationType !== "user_user"
+        ) {
+          return false;
+        }
+        
+        // 提取消息的文本和文件信息
+        const msgParts = msg.parts || [];
+        const msgTextParts = msgParts.filter((p: any) => p.type === "text");
+        const msgFileParts = msgParts.filter((p: any) => p.type === "file");
+        const msgText = msgTextParts.length > 0 ? (msgTextParts[0] as any).text : "";
+        const msgFileUrl = msgFileParts.length > 0 ? (msgFileParts[0] as any).url : null;
+        
+        // 提取SSE消息的文本和文件信息
+        const sseText = sseMessage.content && sseMessage.content !== "[FILE_TRANSFER]" 
+          ? sseMessage.content 
+          : "";
+        const sseFileUrl = sseMessage.file_attachment 
+          ? (sseMessage.file_attachment.download_url || sseMessage.file_attachment.file_id)
+          : null;
+        
+        // 比较文本内容（忽略空文本）
+        const textMatch = !msgText && !sseText || msgText === sseText;
+        
+        // 比较文件URL（如果有文件）
+        const fileMatch = !msgFileUrl && !sseFileUrl || msgFileUrl === sseFileUrl;
+        
+        // 只有当文本和文件都匹配时，才认为是同一条消息
+        return textMatch && fileMatch;
+      });
 
       if (existingMessage) {
+        console.log("[Chat] 检测到重复消息，已跳过:", {
+          senderId: sseMessage.sender_id,
+          receiverId: sseMessage.receiver_id,
+          content: sseMessage.content,
+          hasFile: !!sseMessage.file_attachment,
+        });
         return;
       }
 
@@ -357,16 +391,44 @@ export function Chat({
       // 添加到消息列表
       setMessages((prevMessages) => {
         // 检查是否已存在（再次检查，避免重复）
-        const alreadyExists = prevMessages.some(
-          (msg) =>
-            msg.metadata?.senderId === chatMessage.metadata?.senderId &&
-            msg.metadata?.receiverId === chatMessage.metadata?.receiverId &&
-            msg.role === "assistant" &&
-            msg.metadata?.communicationType === "user_user" &&
-            (msg.parts?.[0] as any)?.text === sseMessage.content
-        );
+        // 改进：同时检查文本内容和文件附件
+        const alreadyExists = prevMessages.some((msg) => {
+          // 检查基本字段匹配
+          if (
+            msg.metadata?.senderId !== chatMessage.metadata?.senderId ||
+            msg.metadata?.receiverId !== chatMessage.metadata?.receiverId ||
+            msg.role !== "assistant" ||
+            msg.metadata?.communicationType !== "user_user"
+          ) {
+            return false;
+          }
+          
+          // 提取消息的文本和文件信息
+          const msgParts = msg.parts || [];
+          const msgTextParts = msgParts.filter((p: any) => p.type === "text");
+          const msgFileParts = msgParts.filter((p: any) => p.type === "file");
+          const msgText = msgTextParts.length > 0 ? (msgTextParts[0] as any).text : "";
+          const msgFileUrl = msgFileParts.length > 0 ? (msgFileParts[0] as any).url : null;
+          
+          // 提取新消息的文本和文件信息
+          const newParts = chatMessage.parts || [];
+          const newTextParts = newParts.filter((p: any) => p.type === "text");
+          const newFileParts = newParts.filter((p: any) => p.type === "file");
+          const newText = newTextParts.length > 0 ? (newTextParts[0] as any).text : "";
+          const newFileUrl = newFileParts.length > 0 ? (newFileParts[0] as any).url : null;
+          
+          // 比较文本内容（忽略空文本）
+          const textMatch = !msgText && !newText || msgText === newText;
+          
+          // 比较文件URL（如果有文件）
+          const fileMatch = !msgFileUrl && !newFileUrl || msgFileUrl === newFileUrl;
+          
+          // 只有当文本和文件都匹配时，才认为是同一条消息
+          return textMatch && fileMatch;
+        });
 
         if (alreadyExists) {
+          console.log("[Chat] 在setMessages中检测到重复消息，已跳过");
           return prevMessages;
         }
 

@@ -687,12 +687,11 @@ function PureModelSelectorCompact({
     setOptimisticModelId(selectedModelId);
   }, [selectedModelId]);
 
-  const { availableChatModelIds } = entitlementsByUserType[userType];
-
   // 分离 agents 和 users
+  // 统一使用好友列表的逻辑：显示所有agents（包括动态智能体），不进行权限过滤
+  // 权限过滤应该在发送消息时进行，而不是在显示列表时
   const availableAgents = chatModels.filter((chatModel) => {
-    if (chatModel.type === "user") return false;
-    return availableChatModelIds.includes(chatModel.id);
+    return chatModel.type === "agent";
   });
 
   const availableUsers = chatModels.filter((chatModel) => {
@@ -773,44 +772,53 @@ function PureModelSelectorCompact({
           <ChevronDownIcon size={16} />
         </Button>
       </Trigger>
-      <PromptInputModelSelectContent className="min-w-[260px] p-0">
-        <div className="flex flex-col gap-px">
-          {modelsWithAvatars
-            .filter((m) => m.type === "agent")
-            .map((model) => (
-              <SelectItem key={model.id} value={model.name}>
-                <div className="flex items-center gap-2">
-                  <UnifiedAvatar
-                    name={model.name}
-                    id={model.id}
-                    isAgent={true}
-                    size={5}
-                  />
-                  <div className="flex flex-col">
-                    <div className="truncate font-medium text-xs">{model.name}</div>
-                    <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
-                      {model.description || "智能体"}
-                    </div>
+      <PromptInputModelSelectContent className="min-w-[240px] sm:min-w-[260px] max-h-[70vh] overflow-y-auto">
+        {/* 智能体分组 */}
+        {modelsWithAvatars.filter((m) => m.type === "agent").length > 0 && (
+          <>
+            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              智能体
+            </div>
+            {modelsWithAvatars
+              .filter((m) => m.type === "agent")
+              .map((model) => (
+                <SelectItem key={model.id} value={model.name}>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <UnifiedAvatar
+                      name={model.name}
+                      id={model.id}
+                      isAgent={true}
+                      size={5}
+                    />
+                    <div className="text-sm truncate">{model.name}</div>
                   </div>
-                </div>
-              </SelectItem>
-            ))}
-          {modelsWithAvatars.filter((m) => m.type === "user").length > 0 && (
-            <>
+                </SelectItem>
+              ))}
+          </>
+        )}
+        
+        {/* 用户分组 */}
+        {modelsWithAvatars.filter((m) => m.type === "user").length > 0 && (
+          <>
+            {modelsWithAvatars.filter((m) => m.type === "agent").length > 0 && (
               <div className="mx-2 my-1 h-px bg-border" />
-              {modelsWithAvatars
-                .filter((m) => m.type === "user")
-                .map((model) => {
-                  // 判断是否是当前用户（本地用户不显示状态）
-                  const isModelCurrentUser = isLoggedIn && session?.user && (() => {
-                    const currentUserId = session.user.memberId || session.user.email?.split("@")[0] || session.user.id;
-                    const modelMemberId = model.id.replace(/^user::/, "");
-                    return modelMemberId === currentUserId;
-                  })();
-                  
-                  return (
+            )}
+            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              用户
+            </div>
+            {modelsWithAvatars
+              .filter((m) => m.type === "user")
+              .map((model) => {
+                // 判断是否是当前用户（本地用户不显示状态）
+                const isModelCurrentUser = isLoggedIn && session?.user && (() => {
+                  const currentUserId = session.user.memberId || session.user.email?.split("@")[0] || session.user.id;
+                  const modelMemberId = model.id.replace(/^user::/, "");
+                  return modelMemberId === currentUserId;
+                })();
+                
+                return (
                   <SelectItem key={model.id} value={model.name}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <UnifiedAvatar
                         name={model.name}
                         id={model.id}
@@ -819,21 +827,13 @@ function PureModelSelectorCompact({
                         showStatus={!isModelCurrentUser}
                         isOnline={model.isOnline}
                       />
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-2">
-                          <div className="truncate font-medium text-xs">{model.name}</div>
-                        </div>
-                        <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
-                          用户
-                        </div>
-                      </div>
+                      <div className="text-sm truncate">{model.name}</div>
                     </div>
                   </SelectItem>
-                  );
-                })}
-            </>
-          )}
-        </div>
+                );
+              })}
+          </>
+        )}
       </PromptInputModelSelectContent>
     </PromptInputModelSelect>
   );
