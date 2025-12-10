@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { StarFilledIcon, StarIcon } from "./icons";
+import { StarFilledIcon, StarIcon, TrashIcon } from "./icons";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 
@@ -29,6 +29,7 @@ interface CollectionItem {
  */
 export function CollectionsList() {
   const [mounted, setMounted] = useState(false);
+  const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const { data: session } = useSession();
   
   // 防止 hydration 不匹配：确保服务器端和客户端初始渲染一致
@@ -83,7 +84,7 @@ export function CollectionsList() {
     }
 
     try {
-      const response = await fetch(`/api/collections?id=${encodeURIComponent(collectionId)}`, {
+      const response = await fetch(`/api/collections?id=${encodeURIComponent(collectionId)}&user_id=${encodeURIComponent(userId)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       });
@@ -142,15 +143,17 @@ export function CollectionsList() {
   }
 
   return (
-    <ScrollArea className="flex-1 h-full w-full">
-      <div className="space-y-0 px-1 pb-1">
+    <ScrollArea className="flex-1 h-full w-full overflow-visible">
+      <div className="space-y-0.5 px-1 pb-1">
         {sortedCollections.map((item) => (
           <div
             key={item.id}
             className={cn(
               "p-1 rounded-sm border border-sidebar-border bg-background hover:bg-accent transition-colors cursor-pointer",
-              "text-[11px] relative group w-full"
+              "text-[11px] relative group/item w-full"
             )}
+            onMouseEnter={() => setHoveredItemId(item.id)}
+            onMouseLeave={() => setHoveredItemId(null)}
             onClick={() => {
               // TODO: 实现点击收藏项后嵌入到当前对话上下文
               console.log("点击收藏项:", item);
@@ -170,8 +173,21 @@ export function CollectionsList() {
             <div className="text-[10px] text-foreground line-clamp-2 leading-tight break-words w-full">
               {item.message_content}
             </div>
-            <div className="text-[9px] text-muted-foreground mt-0.5">
-              {format(new Date(item.created_at), "MM-dd HH:mm", { locale: zhCN })}
+            <div className="text-[9px] text-muted-foreground mt-0.5 relative flex items-center gap-1">
+              {hoveredItemId === item.id && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-4 w-4 p-0 shrink-0 text-muted-foreground hover:text-destructive z-50 flex-shrink-0"
+                  onClick={(e) => handleDeleteCollection(item.id, e)}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  title="删除收藏"
+                  type="button"
+                >
+                  <TrashIcon size={10} />
+                </Button>
+              )}
+              <span className="flex-1">{format(new Date(item.created_at), "MM-dd HH:mm", { locale: zhCN })}</span>
             </div>
           </div>
         ))}

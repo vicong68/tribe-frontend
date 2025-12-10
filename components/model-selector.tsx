@@ -20,6 +20,57 @@ import { cn } from "@/lib/utils";
 import { CheckCircleFillIcon, ChevronDownIcon, BotIcon, UserIcon } from "./icons";
 import { UnifiedAvatar } from "./unified-avatar";
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
+
+/**
+ * 预加载动态智能体实例
+ */
+async function preloadDynamicAgent(agentId: string): Promise<void> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/agents/${encodeURIComponent(agentId)}/preload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    if (response.ok) {
+      const result = await response.json().catch(() => ({}));
+      console.log(`[ModelSelector] ✅ 预加载动态智能体 '${agentId}' 成功:`, result.message || "成功");
+    } else {
+      // 如果不是动态智能体，会返回400，这是正常的，静默处理
+      if (response.status === 400) {
+        const errorData = await response.json().catch(() => ({}));
+        console.log(`[ModelSelector] ℹ️  智能体 '${agentId}' 不是动态智能体，无需预加载:`, errorData.message || "");
+        return;
+      }
+      const errorData = await response.json().catch(() => ({}));
+      console.warn(`[ModelSelector] ⚠️  预加载动态智能体 '${agentId}' 失败:`, errorData.message || response.statusText);
+    }
+  } catch (error) {
+    // 网络错误等，静默处理，不影响用户体验
+    console.warn(`[ModelSelector] ⚠️  预加载动态智能体 '${agentId}' 请求失败:`, error);
+  }
+}
+
+/**
+ * 清理动态智能体实例
+ */
+async function cleanupDynamicAgent(agentId: string): Promise<void> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/agents/${encodeURIComponent(agentId)}/cleanup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.warn(`[ModelSelector] 清理动态智能体失败: ${errorData.message || response.statusText}`);
+    }
+  } catch (error) {
+    // 网络错误等，静默处理，不影响用户体验
+    console.warn(`[ModelSelector] 清理动态智能体请求失败:`, error);
+  }
+}
+
 export function ModelSelector({
   session,
   selectedModelId,
@@ -32,6 +83,58 @@ export function ModelSelector({
   const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新
   const [optimisticModelId, setOptimisticModelId] =
     useOptimistic(selectedModelId);
+  const previousModelIdRef = useRef<string>(selectedModelId); // 跟踪之前的收信方ID
+  
+  // 当selectedModelId变化时，更新previousModelIdRef
+  useEffect(() => {
+    previousModelIdRef.current = selectedModelId;
+  }, [selectedModelId]);
+  
+  // 页面加载/刷新时，如果当前收信方是动态智能体，自动预加载
+  useEffect(() => {
+    const modelId = selectedModelId;
+    // 检查是否是动态智能体（不是用户，不是静态智能体）
+    if (modelId && !modelId.startsWith("user::") && modelId !== "chat" && modelId !== "rag") {
+      console.log(`[ModelSelector] 页面加载，检测到动态智能体 '${modelId}'，开始预加载...`);
+      preloadDynamicAgent(modelId).catch((error) => {
+        console.warn(`[ModelSelector] 页面加载时预加载动态智能体 '${modelId}' 失败:`, error);
+      });
+    }
+  }, []); // 只在组件挂载时执行一次
+  
+  // 统一的收信方切换处理函数
+  const handleModelChange = useCallback(async (newModelId: string) => {
+    const previousModelId = previousModelIdRef.current;
+    
+    // 如果切换了收信方，处理动态智能体的预加载和清理
+    if (previousModelId !== newModelId) {
+      // 1. 清理之前的动态智能体（如果是动态智能体）
+      if (previousModelId && !previousModelId.startsWith("user::") && previousModelId !== "chat" && previousModelId !== "rag") {
+        // 可能是动态智能体，尝试清理
+        console.log(`[ModelSelector] 切换收信方，清理动态智能体 '${previousModelId}'...`);
+        cleanupDynamicAgent(previousModelId).catch((error) => {
+          console.warn(`[ModelSelector] 清理动态智能体 '${previousModelId}' 失败:`, error);
+        });
+      }
+      
+      // 2. 预加载新的动态智能体（如果是动态智能体）
+      if (!newModelId.startsWith("user::") && newModelId !== "chat" && newModelId !== "rag") {
+        // 可能是动态智能体，尝试预加载
+        console.log(`[ModelSelector] 切换收信方，预加载动态智能体 '${newModelId}'...`);
+        preloadDynamicAgent(newModelId).catch((error) => {
+          console.warn(`[ModelSelector] 预加载动态智能体 '${newModelId}' 失败:`, error);
+        });
+      }
+      
+      // 更新之前的收信方ID
+      previousModelIdRef.current = newModelId;
+    }
+    
+    startTransition(() => {
+      setOptimisticModelId(newModelId);
+      saveChatModelAsCookie(newModelId);
+    });
+  }, []);
 
   const userType = session.user.type;
   const isLoggedIn = userType === "regular";
@@ -179,10 +282,7 @@ export function ModelSelector({
                     key={id}
                     onSelect={() => {
                       setOpen(false);
-                      startTransition(() => {
-                        setOptimisticModelId(id);
-                        saveChatModelAsCookie(id);
-                      });
+                      handleModelChange(id);
                     }}
                   >
                     <button
@@ -247,10 +347,7 @@ export function ModelSelector({
                     key={id}
                     onSelect={() => {
                       setOpen(false);
-                      startTransition(() => {
-                        setOptimisticModelId(id);
-                        saveChatModelAsCookie(id);
-                      });
+                      handleModelChange(id);
                     }}
                   >
                     <button
