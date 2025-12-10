@@ -19,7 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, ChevronDown } from "lucide-react";
 import { useRightSidebar } from "@/components/right-sidebar-provider";
 import { SidebarHistory } from "@/components/sidebar-history";
-import { CollectionsList } from "@/components/collections-list";
+import { CollectionsList, CollectionsToolbar } from "@/components/collections-list";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -134,6 +134,8 @@ export function ConversationPanel({ user }: { user: User | undefined }) {
     const data = modules[id as keyof typeof modules];
     if (!data) return null;
     const isCollapsed = collapsed[id];
+    // 为收藏消息模块添加工具栏
+    const toolbar = id === "collections" ? <CollectionsToolbar /> : undefined;
     return (
       <SortableModule
         key={id}
@@ -141,6 +143,7 @@ export function ConversationPanel({ user }: { user: User | undefined }) {
         title={data.title}
         collapsed={isCollapsed}
         onToggle={() => toggleCollapsed(id)}
+        toolbar={toolbar}
       >
         {!isCollapsed && <div className="flex-1 min-h-0 overflow-hidden">{data.content}</div>}
       </SortableModule>
@@ -209,9 +212,10 @@ interface SortableModuleProps {
   collapsed?: boolean;
   onToggle: () => void;
   children: React.ReactNode;
+  toolbar?: React.ReactNode; // 可选的工具栏（显示在标题栏下方）
 }
 
-function SortableModule({ id, title, collapsed = false, onToggle, children }: SortableModuleProps) {
+function SortableModule({ id, title, collapsed = false, onToggle, children, toolbar }: SortableModuleProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   });
@@ -259,6 +263,11 @@ function SortableModule({ id, title, collapsed = false, onToggle, children }: So
           </Button>
         </div>
       </div>
+      {!collapsed && toolbar && (
+        <div className="border-b border-sidebar-border px-1.5 py-0.5">
+          {toolbar}
+        </div>
+      )}
       {!collapsed && (
         <div className="flex-1 min-h-0 overflow-hidden px-1 pb-1 max-h-[50vh]">
           {children}

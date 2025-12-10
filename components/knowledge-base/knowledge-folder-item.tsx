@@ -102,7 +102,7 @@ export function KnowledgeFolderItem({
         paddingLeft: `${8 + level * 12}px`,
       }}
       className={cn(
-        "group relative flex items-center gap-2 rounded-md border border-sidebar-border bg-sidebar p-2 transition-all hover:bg-accent cursor-pointer overflow-visible",
+        "group relative flex items-center gap-2 rounded-md border border-sidebar-border bg-sidebar p-2 transition-all hover:bg-accent cursor-pointer overflow-visible z-10",
         isSelected && "ring-1 ring-primary bg-primary/10",
         isDragging && "cursor-grabbing"
       )}
@@ -155,27 +155,29 @@ export function KnowledgeFolderItem({
         </div>
       </div>
 
-      {/* 工具栏图标（hover 显示） */}
+      {/* 工具栏图标（hover 显示，确保在最上层） */}
       {showActions && (
-        <KnowledgeFolderActions
-          folder={folder}
-          isCollecting={isCollecting}
-          onToggleCollect={onToggleCollect}
-          onDelete={onDelete}
-          onEdit={onEdit}
-          onCreateChild={onCreateChild}
-          onMove={onMove}
-          onShare={onShare}
-          onAddToContext={onAddToContext}
-          onExport={onExport}
-          onMenuToggle={(open) => {
-            setMenuOpen(open);
-            if (open) {
-              setShowActions(true);
-            }
-          }}
-          onContainerClick={(e) => e.stopPropagation()}
-        />
+        <div className="relative z-50">
+          <KnowledgeFolderActions
+            folder={folder}
+            isCollecting={isCollecting}
+            onToggleCollect={onToggleCollect}
+            onDelete={onDelete}
+            onEdit={onEdit}
+            onCreateChild={onCreateChild}
+            onMove={onMove}
+            onShare={onShare}
+            onAddToContext={onAddToContext}
+            onExport={onExport}
+            onMenuToggle={(open) => {
+              setMenuOpen(open);
+              if (open) {
+                setShowActions(true);
+              }
+            }}
+            onContainerClick={(e) => e.stopPropagation()}
+          />
+        </div>
       )}
     </div>
   );

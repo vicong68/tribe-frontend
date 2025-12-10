@@ -31,6 +31,7 @@ interface KnowledgeFileItemProps {
   isDimmed?: boolean;
   collectingFolderId?: string | null;
   selectedFolderId?: string | null;
+  viewMode?: "grid" | "list";
   onSelect?: (fileId: string) => void;
   onDelete?: (fileId: string) => void;
   onEdit?: (fileId: string) => void;
@@ -51,6 +52,7 @@ export function KnowledgeFileItem({
   isDimmed = false,
   collectingFolderId = null,
   selectedFolderId = null,
+  viewMode = "grid",
   onSelect,
   onDelete,
   onEdit,
@@ -125,7 +127,8 @@ export function KnowledgeFileItem({
       ref={setNodeRef}
       style={sortableStyle}
       className={cn(
-        "group relative flex flex-col rounded-md border border-sidebar-border bg-sidebar p-2 transition-all hover:bg-accent",
+        "group relative flex rounded-md border border-sidebar-border bg-sidebar p-2 transition-all hover:bg-accent",
+        viewMode === "list" ? "flex-row items-center gap-3" : "flex-col",
         isSelected && "ring-1 ring-primary bg-primary/10",
         isDimmed && "opacity-30",
         isDragging && "cursor-grabbing"
@@ -134,7 +137,10 @@ export function KnowledgeFileItem({
       onMouseLeave={() => !menuOpen && setShowActions(false)}
     >
       {/* 顶部：拖拽手柄 + 图标和名称 */}
-      <div className="flex items-start gap-2">
+      <div className={cn(
+        "flex gap-2",
+        viewMode === "list" ? "items-center flex-1" : "items-start flex-col"
+      )}>
         <div className="flex items-center gap-1 flex-shrink-0">
           <Button
             variant="ghost"
@@ -148,22 +154,43 @@ export function KnowledgeFileItem({
             <GripVertical className="size-3" />
           </Button>
           <div className="flex-shrink-0">
-            <FileIconComponent className="size-5 text-muted-foreground" />
+            <FileIconComponent className={cn(
+              "text-muted-foreground",
+              viewMode === "list" ? "size-4" : "size-5"
+            )} />
           </div>
         </div>
-        <div className="min-w-0 flex-1">
+        <div className={cn(
+          "min-w-0",
+          viewMode === "list" ? "flex-1" : "flex-1 w-full"
+        )}>
           <div className="truncate font-medium text-xs" title={file.filename}>
             {file.filename}
           </div>
-          <div className="mt-0.5 text-[10px] text-muted-foreground truncate">
-            {file.file_id}
-          </div>
-          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-            {statusBadge}
-            <span className="text-[10px] text-muted-foreground">
-              {formatFileSize(file.file_size)}
-            </span>
-          </div>
+          {viewMode === "grid" && (
+            <>
+              <div className="mt-0.5 text-[10px] text-muted-foreground truncate">
+                {file.file_id}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                {statusBadge}
+                <span className="text-[10px] text-muted-foreground">
+                  {formatFileSize(file.file_size)}
+                </span>
+              </div>
+            </>
+          )}
+          {viewMode === "list" && (
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[10px] text-muted-foreground truncate max-w-[200px]">
+                {file.file_id}
+              </span>
+              {statusBadge}
+              <span className="text-[10px] text-muted-foreground">
+                {formatFileSize(file.file_size)}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

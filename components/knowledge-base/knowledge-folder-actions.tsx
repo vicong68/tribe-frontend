@@ -65,7 +65,7 @@ export function KnowledgeFolderActions({
 
   return (
     <div
-      className="flex items-center gap-0.5 rounded bg-background/90 backdrop-blur-sm p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+      className="flex items-center gap-0.5 rounded bg-background/90 backdrop-blur-sm p-0.5 opacity-0 transition-opacity group-hover:opacity-100 z-50 relative"
       onClick={onContainerClick}
       onMouseDown={onContainerClick}
     >

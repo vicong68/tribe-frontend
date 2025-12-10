@@ -241,8 +241,18 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
       }
     }
     
-    // 使用清理后的 parts，如果为空则使用空数组（不保留错误格式的 parts）
-    const finalParts = cleanedParts.length > 0 ? cleanedParts : [];
+    // 使用清理后的 parts，如果为空则尝试从 message.content 填充文本
+    const finalParts =
+      cleanedParts.length > 0
+        ? cleanedParts
+        : (message as any).content
+        ? [
+            {
+              type: "text",
+              text: (message as any).content as string,
+            },
+          ]
+        : [];
     
     return {
       id: message.id,

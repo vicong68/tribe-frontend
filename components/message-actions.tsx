@@ -116,11 +116,55 @@ export function PureMessageActions({
     return null;
   }
 
-  const textFromParts = message.parts
-    ?.filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
+  // 提取完整的消息内容（用于保存到后端，包括所有信息）
+  const extractFullMessageContent = (): string => {
+    if (!message.parts || message.parts.length === 0) {
+      return message.content || "";
+    }
+
+    const contentParts: string[] = [];
+
+    message.parts.forEach((part) => {
+      if (part.type === "text" && (part as any).text) {
+        contentParts.push((part as any).text);
+      } else if (part.type === "reasoning" && (part as any).reasoning) {
+        contentParts.push(`[推理过程]\n${(part as any).reasoning}`);
+      } else if (part.type === "tool-invocation" && (part as any).toolInvocation) {
+        const toolInv = (part as any).toolInvocation;
+        const toolName = toolInv.toolName || "未知工具";
+        const toolArgs = toolInv.args ? JSON.stringify(toolInv.args, null, 2) : "";
+        const toolResult = toolInv.result ? JSON.stringify(toolInv.result, null, 2) : "";
+        contentParts.push(`[工具调用: ${toolName}]\n参数: ${toolArgs}\n结果: ${toolResult}`);
+      }
+    });
+
+    return contentParts.join("\n\n").trim();
+  };
+
+  // 提取主要消息内容（用于前端展示和保存文件，只包含文本和简单附件信息）
+  const extractMainMessageContent = (): string => {
+    if (!message.parts || message.parts.length === 0) {
+      return message.content || "";
+    }
+
+    const contentParts: string[] = [];
+
+    message.parts.forEach((part) => {
+      if (part.type === "text" && (part as any).text) {
+        // 只提取文本内容
+        contentParts.push((part as any).text);
+      }
+      // 不包含推理过程和工具调用
+    });
+
+    return contentParts.join("\n\n").trim();
+  };
+
+  // 用于复制、分享等操作的主要内容
+  const textFromParts = extractMainMessageContent();
+  
+  // 用于保存到后端的完整内容
+  const fullMessageContent = extractFullMessageContent();
 
   const handleCopy = async () => {
     if (!textFromParts) {
@@ -316,7 +360,7 @@ export function PureMessageActions({
     }
 
     // 如果未收藏，则添加收藏
-    // 获取发送者名称（从metadata中获取，确保显示具体名称）
+    // 获取完整的原始消息信息
     const metadata = message.metadata || {};
     let senderName: string;
     if (message.role === "user") {
@@ -327,6 +371,31 @@ export function PureMessageActions({
       senderName = (metadata as any).senderName || (metadata as any).agentUsed || "智能体";
     }
 
+    // 提取文件附件信息（用于保存到后端完整信息）
+    const fileAttachments = message.parts
+      ?.filter((part) => part.type === "file")
+      .map((part) => {
+        const fileInfo = (part as any).file || part;
+        return {
+          name: fileInfo.name || fileInfo.filename || "文件",
+          url: fileInfo.url || fileInfo.download_url || "",
+          contentType: fileInfo.mediaType || fileInfo.file_type || "application/octet-stream",
+          size: fileInfo.size,
+          fileId: fileInfo.fileId || fileInfo.file_id || "",
+        };
+      }) || [];
+
+    // 构建保存到后端的完整消息内容（包含所有信息：文本、推理、工具调用、文件等）
+    let contentForBackend = fullMessageContent;
+    if (fileAttachments.length > 0) {
+      const fileInfoText = fileAttachments.map((file, index) => {
+        return `[附件 ${index + 1}]\n文件名: ${file.name}\n类型: ${file.contentType}\n大小: ${file.size ? `${(file.size / 1024).toFixed(2)} KB` : "未知"}\n文件ID: ${file.fileId}\n下载链接: ${file.url}`;
+      }).join("\n\n");
+      contentForBackend = contentForBackend 
+        ? `${contentForBackend}\n\n${fileInfoText}`
+        : fileInfoText;
+    }
+
     try {
       const response = await fetch("/api/collections", {
         method: "POST",
@@ -334,9 +403,9 @@ export function PureMessageActions({
         body: JSON.stringify({
           chat_id: chatId,
           message_id: message.id,
-          message_content: textFromParts,
+          message_content: contentForBackend, // 保存完整信息到后端
           message_role: message.role,
-          sender_name: senderName, // 传递发送者名称
+          sender_name: senderName,
         }),
       });
 

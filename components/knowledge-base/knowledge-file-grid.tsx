@@ -238,7 +238,7 @@ export function KnowledgeFileGrid({
         className={cn(
           "grid gap-2",
           viewMode === "grid"
-            ? "grid-cols-1"
+            ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
             : "grid-cols-1"
         )}
       >
@@ -252,6 +252,7 @@ export function KnowledgeFileGrid({
               isDimmed={isDimmed}
               collectingFolderId={collectingFolderId}
               selectedFolderId={selectedFolderId}
+              viewMode={viewMode}
               onToggleCollect={handleToggleCollect}
               onDelete={handleDelete}
               onEdit={handleEdit}

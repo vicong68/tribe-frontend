@@ -63,7 +63,7 @@ export function KnowledgeFolderToolbar({
   };
 
   return (
-    <div className="flex items-center gap-1.5 border-b border-sidebar-border bg-sidebar p-2">
+    <div className="flex items-center gap-1.5 border-b border-sidebar-border bg-sidebar p-2 relative z-0">
       {/* 新建文件夹按钮 */}
       <Button
         variant="default"
