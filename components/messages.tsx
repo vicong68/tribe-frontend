@@ -222,7 +222,7 @@ function PureMessages({
              uniqueMessages.length > 0 &&
              uniqueMessages[uniqueMessages.length - 1]?.role !== "assistant" && (
               <ThinkingMessage 
-                key={`thinking-${selectedModelId}`} // ✅ 优化：key 包含 selectedModelId，确保切换 agent 时重新渲染
+                key="thinking"
                 agentName={selectedModelId} 
                 selectedModelId={selectedModelId}
               />

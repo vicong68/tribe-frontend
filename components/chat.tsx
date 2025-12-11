@@ -141,16 +141,10 @@ export function Chat({
       }
       
       // ✅ 优化：处理后端发送的 metadata 事件，确保在流式传输过程中正确更新消息的 metadata
-      // 后端在流式响应开始时通过 data-message-metadata 事件传递 agentUsed 和 senderName
+      // 后端在流式响应开始时通过 metadata 事件传递 agentUsed 和 senderName
       // AI SDK 会自动将 metadata 事件更新到消息中，但我们需要确保消息能正确渲染
-      if (
-        dataPart.type === "metadata" || 
-        dataPart.type === "data-message-metadata" ||
-        (dataPart.type === "data" && dataPart.data?.type === "data-message-metadata")
-      ) {
-        const metadata = dataPart.type === "metadata" || dataPart.type === "data-message-metadata" 
-          ? dataPart 
-          : dataPart.data;
+      if (dataPart.type === "metadata" || (dataPart.type === "data" && dataPart.data?.type === "metadata")) {
+        const metadata = dataPart.type === "metadata" ? dataPart : dataPart.data;
         if (metadata && typeof metadata === "object") {
           // metadata 事件已由 AI SDK 自动处理，这里只需要记录日志（开发环境）
           if (process.env.NODE_ENV === "development") {

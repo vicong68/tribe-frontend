@@ -80,17 +80,15 @@ const PurePreviewMessage = ({
   const { models: chatModels } = useChatModels(false); // 总是加载agents列表，但不包含用户列表
   
   // ✅ 优化：使用 useMemo 缓存渲染信息，避免重复计算
-  // 在流式传输过程中，传递 isLoading 状态，确保及时使用 selectedModelId 更新 agent 信息
   const renderInfo = useMemo(() => {
     return getMessageRenderInfo(
       message,
       metadata as Record<string, any> | null | undefined,
       selectedModelId,
       session,
-      chatModels,
-      isLoading // ✅ 传递流式传输状态，用于优化渲染逻辑
+      chatModels
     );
-  }, [message, metadata, selectedModelId, session, chatModels, isLoading]);
+  }, [message, metadata, selectedModelId, session, chatModels]);
   
   // 从渲染信息中提取需要的变量（保持向后兼容）
   const { senderName, receiverName, avatarSeed, senderId, isAgent, isRemoteUser, isLocalUser } = renderInfo;
@@ -615,14 +613,12 @@ export const ThinkingMessage = ({
   agentName?: string;
   selectedModelId?: string;
 }) => {
-  // ✅ 标准化：ThinkingMessage 使用 selectedModelId 查找 Agent 显示名称和头像
-  // 确保与流式回复消息的渲染信息保持一致（流式传输开始时也使用 selectedModelId）
+  // ✅ 统一使用思考消息渲染工具函数，确保与流式消息的渲染信息保持一致
   const { models: chatModels } = useChatModels(false); // 总是加载 agents 列表，但不包含用户列表
   
   // 使用统一的思考消息渲染工具函数获取渲染信息
   const renderInfo = getThinkingMessageRenderInfo(selectedModelId, chatModels);
   
-  // 标准化：优先使用 renderInfo.senderName（从 selectedModelId 查找）
   // 如果传入了 agentName 且不是 agent_id，优先使用（向后兼容）
   const displayAgentName = agentName && agentName !== selectedModelId 
     ? agentName 
