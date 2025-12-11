@@ -4,15 +4,19 @@ import { useEffect, useRef } from "react";
 import type { ChatMessage } from "@/lib/types";
 
 /**
- * 消息持久化 Hook
- * 符合 AI SDK 规范的消息保存机制
+ * 消息持久化 Hook（备用方案）
+ * 
+ * ⚠️ 默认禁用：优先使用后端保存（stream_routes.py 中的 persist_final_message）
+ * 
+ * 当前状态：
+ * - 前端保存功能默认禁用（ENABLE_FRONTEND_SAVE=false）
+ * - 后端保存是主要的保存机制（更可靠、高效）
+ * - 此 Hook 保留作为调试备用，可在后端保存失败时手动启用
+ * 
+ * 启用方式：
+ * - 在 chat.tsx 中设置 ENABLE_FRONTEND_SAVE=true
  * 
  * 参考: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot/message-persistence
- * 
- * 功能：
- * 1. 在流式响应完成后自动保存 assistant 消息
- * 2. 避免重复保存
- * 3. 错误处理和重试机制
  */
 export function useMessagePersistence({
   chatId,
@@ -211,36 +215,28 @@ export function useMessagePersistence({
 
   /**
    * 在页面加载时检查并保存未保存的消息（用于恢复场景）
+   * ⚠️ 默认禁用：优先使用后端保存
+   * 仅在 ENABLE_FRONTEND_SAVE=true 时启用（调试模式）
    */
   useEffect(() => {
-    if (!messages || messages.length === 0) return;
-
-    const checkAndSaveMessages = async () => {
-      // 延迟执行，确保消息状态已完全加载
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      
-      const assistantMessages = messages.filter((msg) => 
-        msg.role === "assistant" &&
-        msg.parts &&
-        Array.isArray(msg.parts) &&
-        msg.parts.length > 0 &&
-        msg.parts.some((p: any) => 
-          p && typeof p === 'object' &&
-          ((p.type === "text" && p.text && p.text.trim().length > 0) ||
-           p.type === "file" ||
-           (p.type !== "text" && p.type !== "file" && p.type !== "data-appendMessage"))
-        )
-      );
-      
-      if (assistantMessages.length > 0) {
-        if (process.env.NODE_ENV === "development") {
-          console.log("[MessagePersistence] checkAndSaveMessages: Found", assistantMessages.length, "assistant messages to save");
+    // ✅ 默认禁用页面加载时的检查保存（避免与后端保存冲突）
+    // 如果需要启用，请在 chat.tsx 中设置 ENABLE_FRONTEND_SAVE=true
+    // 此功能主要用于调试场景，正常情况下后端已保存所有消息
+    if (process.env.NODE_ENV === "development") {
+      // 仅在开发环境记录日志，不执行保存
+      if (messages && messages.length > 0) {
+        const assistantMessages = messages.filter((msg) => 
+          msg.role === "assistant" &&
+          msg.parts &&
+          Array.isArray(msg.parts) &&
+          msg.parts.length > 0
+        );
+        if (assistantMessages.length > 0) {
+          console.log(`[MessagePersistence] ⚠️  页面加载检查保存已禁用，发现 ${assistantMessages.length} 条 assistant 消息（应由后端保存）`);
         }
-        await saveAssistantMessages(assistantMessages);
       }
-    };
-
-    checkAndSaveMessages();
+    }
+    // 不执行实际保存，避免与后端保存冲突
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, messages.length]);
 

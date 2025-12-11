@@ -13,6 +13,7 @@ import {
 } from "@/lib/avatar-utils";
 import { useChatModels } from "@/lib/ai/models-client";
 import { useDataStream } from "./data-stream-provider";
+import { getMessageRenderInfo, getThinkingMessageRenderInfo } from "@/lib/message-render-utils";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
 import { MessageContent } from "./elements/message";
@@ -74,20 +75,34 @@ const PurePreviewMessage = ({
   // 获取metadata（缓存，避免重复访问）
   const metadata = message.metadata || {};
   
-  // 判断是否为Agent消息
-  // 注意：在流式传输过程中，metadata可能为空，此时需要根据selectedModelId判断
-  // 如果selectedModelId存在且不是user::开头，则认为是Agent消息
-  const isAgent = isAgentMessage(message.role, (metadata as any).communicationType) ||
-    (message.role === "assistant" && !(metadata as any).communicationType && selectedModelId && !selectedModelId.startsWith("user::"));
-  const isRemoteUser = isRemoteUserMessage(message.role, (metadata as any).communicationType);
-  const isLocalUser = message.role === "user";
+  // ✅ 统一使用消息渲染工具函数，简化代码逻辑
+  // Hooks必须在顶层调用，但可以通过参数控制是否实际加载
+  const { models: chatModels } = useChatModels(false); // 总是加载agents列表，但不包含用户列表
+  
+  // ✅ 优化：使用 useMemo 缓存渲染信息，避免重复计算
+  // 在流式传输过程中，传递 isLoading 状态，确保及时使用 selectedModelId 更新 agent 信息
+  const renderInfo = useMemo(() => {
+    return getMessageRenderInfo(
+      message,
+      metadata as Record<string, any> | null | undefined,
+      selectedModelId,
+      session,
+      chatModels,
+      isLoading // ✅ 传递流式传输状态，用于优化渲染逻辑
+    );
+  }, [message, metadata, selectedModelId, session, chatModels, isLoading]);
+  
+  // 从渲染信息中提取需要的变量（保持向后兼容）
+  const { senderName, receiverName, avatarSeed, senderId, isAgent, isRemoteUser, isLocalUser } = renderInfo;
+  const communicationType = renderInfo.communicationType;
+  
+  // ✅ 优化：获取发送者ID（用于在线状态），简化逻辑
   const senderIdForStatus = useMemo(() => {
-    const senderId = (metadata as any).senderId as string | undefined;
     if (senderId) return senderId;
     if (isRemoteUser) return (metadata as any).sender_name;
     if (isLocalUser) return session?.user?.memberId || session?.user?.email?.split("@")[0];
     return undefined;
-  }, [metadata, isRemoteUser, isLocalUser, session]);
+  }, [senderId, isRemoteUser, isLocalUser, metadata, session]);
 
   // 用户在线状态（用于头像指示）
   const [statusVersion, setStatusVersion] = useState(0);
@@ -125,141 +140,6 @@ const PurePreviewMessage = ({
       window.removeEventListener("sse_user_status_update", handleUserStatusUpdate);
     };
   }, [handleStatusUpdate]);
-  
-  // 判断是否需要从chatModels查找名称（仅在metadata中没有名称时）
-  // 新消息：metadata已固化，包含准确的名称
-  // 旧消息：可能没有metadata.senderName，需要从chatModels查找作为兜底
-  // 注意：对于Agent消息，即使metadata中有agentUsed（agent_id），也需要从chatModels查找显示名称
-  const needsChatModelsLookup = !isLocalUser && (!(metadata as any).senderName || (isAgent && (metadata as any).agentUsed && !(metadata as any).senderName));
-  // Hooks必须在顶层调用，但可以通过参数控制是否实际加载
-  // 对于Agent消息，即使访客用户也需要加载chatModels以查找agent显示名称
-  // 注意：访客用户也需要加载chatModels以查找agent显示名称，但不包含用户列表
-  const { models: chatModels } = useChatModels(false); // 总是加载agents列表，但不包含用户列表
-  
-  // 获取准确的发送者名称
-  // 优先使用metadata（新消息已固化），如果metadata中没有则从chatModels查找（兼容旧消息）
-  // 在流式传输过程中，如果metadata为空，使用selectedModelId作为临时名称
-  let senderName: string;
-  if (isLocalUser) {
-    // 本地用户：优先使用metadata，其次从session获取
-    // 访客用户显示中文"访客"，登录用户显示memberId或email前缀
-    if (session?.user?.type === "guest") {
-      senderName = (metadata as any).senderName || "访客";
-    } else {
-      senderName = (metadata as any).senderName || session?.user?.email?.split("@")[0] || "我";
-    }
-  } else {
-    // Assistant消息：可能是Agent或远端用户
-    // 注意：对于Assistant消息，必须通过communicationType区分Agent和远端用户
-    // 但在流式传输过程中，如果metadata为空，使用selectedModelId判断
-    if (isAgent) {
-      // Agent消息：优先使用metadata.senderName（已固化，应该是显示名称）
-      senderName = (metadata as any).senderName || "";
-      
-      // 如果metadata中没有senderName，但有agentUsed（agent_id），从chatModels查找显示名称
-      if (!senderName && (metadata as any).agentUsed && chatModels.length > 0) {
-        const agentUsed = (metadata as any).agentUsed; // agent_id（如 "chat"）
-        const foundAgent = chatModels.find(
-          (m) => m.type === "agent" && m.id === agentUsed
-        );
-        senderName = foundAgent?.name || ""; // 使用显示名称（如 "司仪"）
-      }
-      
-      // 如果还是没有找到，尝试使用senderId查找
-      if (!senderName && (metadata as any).senderId && chatModels.length > 0) {
-        const senderId = (metadata as any).senderId;
-        const foundAgent = chatModels.find(
-          (m) => m.type === "agent" && m.id === senderId
-        );
-        senderName = foundAgent?.name || "";
-      }
-      
-      // 流式传输过程中，如果 metadata 为空，使用 selectedModelId 从 chatModels 查找显示名称
-      if (!senderName && selectedModelId && chatModels.length > 0) {
-        const foundAgent = chatModels.find(
-          (m) => m.type === "agent" && m.id === selectedModelId
-        );
-        senderName = foundAgent?.name || "";
-      }
-      
-      // 最后的兜底：如果都找不到，使用默认值（不应该发生）
-      if (!senderName) {
-        senderName = (metadata as any).agentUsed || selectedModelId || "智能体";
-      }
-    } else if (isRemoteUser) {
-      // 远端用户消息：优先使用metadata.senderName
-      senderName = (metadata as any).senderName || "";
-      
-      // 如果metadata中没有名称，从chatModels查找
-      if (!senderName && needsChatModelsLookup && chatModels.length > 0) {
-        const senderId = (metadata as any).senderId;
-        const foundUser = chatModels.find(
-          (m) => m.type === "user" && (
-            m.id === senderId || 
-            m.name === (metadata as any).senderName
-          )
-        );
-        senderName = foundUser?.name || "用户";
-      }
-      
-      // 如果还是没有名称，使用默认值
-      if (!senderName) {
-        senderName = "用户";
-      }
-    } else {
-      // 其他情况（可能是metadata为空时的assistant消息）
-      // 在流式传输过程中，如果metadata为空，使用selectedModelId作为临时名称
-      senderName = (metadata as any).senderName || (metadata as any).agentUsed || selectedModelId || "智能体";
-    }
-  }
-  
-  // 使用缓存的metadata，避免重复访问
-  const communicationType = (metadata as any).communicationType;
-  
-  // 获取接收方名称：优先使用 metadata.receiverName，如果为空则从其他来源获取
-  let receiverName = (metadata as any).receiverName;
-  
-  // 对于用户消息，如果 metadata 中没有 receiverName，尝试从 selectedModelId 获取
-  // 这确保在 data-appendMessage 事件处理之前，用户消息也能显示 @xxx 前缀
-  // 但是，如果是分享消息（用户-用户消息），不要从 selectedModelId 获取，只使用 metadata.receiverName
-  const isSharedMessage = Boolean((metadata as any).isSharedMessage);
-
-  // 用户-用户直发：补齐收件人名称，优先使用 metadata，其次使用 receiverId（去掉 user:: 前缀）
-  if (
-    isLocalUser &&
-    communicationType === "user_user" &&
-    !receiverName
-  ) {
-    const receiverId = (metadata as any).receiverId as string | undefined;
-    receiverName = receiverId?.replace(/^user::/, "") || receiverName;
-  }
-
-  if (isLocalUser && !receiverName && !isSharedMessage && selectedModelId && !selectedModelId.startsWith("user::")) {
-    // 用户消息且是 user_agent 类型：从 chatModels 查找 Agent 显示名称
-    if (chatModels.length > 0) {
-      const foundAgent = chatModels.find(
-        (m) => m.type === "agent" && m.id === selectedModelId
-      );
-      receiverName = foundAgent?.name || selectedModelId;
-    } else {
-      receiverName = selectedModelId;
-    }
-  }
-  
-  // ✅ 最佳实践：直接使用后端传递的可靠数据，减少前端逻辑判断
-  // 后端在流式响应开始时通过 metadata 事件传递 agent_id（metadata.agentUsed）
-  // 前端应该直接使用后端传递的 agent_id，确保与思考消息一致
-  // 思考消息使用 selectedModelId（agent_id），流式回复消息使用 metadata.agentUsed（也是 agent_id）
-  // 两者应该一致，因为都来自同一个 selectedChatModel
-  let avatarSeed: string;
-  if (isAgent) {
-    // Agent 消息：优先使用后端传递的 agent_id（metadata.agentUsed），确保与思考消息一致
-    // 后端保证 metadata.agentUsed 与请求中的 agent_id 一致
-    avatarSeed = (metadata as any).agentUsed || (metadata as any).senderId || selectedModelId || "default";
-  } else {
-    // 用户消息或其他：使用 senderId 或 senderName
-    avatarSeed = (metadata as any).senderId || senderName || "default";
-  }
   
   // 获取头像信息（包含图标变体）
   const avatarInfo = getAvatarInfo(
@@ -325,14 +205,17 @@ const PurePreviewMessage = ({
           >
             {attachmentsFromMessage.map((attachment, index) => {
               // 支持多种文件附件格式：
-              // 1. 直接格式：{type: "file", url, name, mediaType, size, fileId}
-              // 2. 嵌套格式：{type: "file", file: {file_id, filename, download_url, size}}
+              // 1. 直接格式：{type: "file", url, name, mediaType, size, fileId, thumbnailUrl}
+              // 2. 嵌套格式：{type: "file", file: {file_id, filename, download_url, size, thumbnail_url}}
               const fileObj = (attachment as any).file || attachment;
               const fileUrl = fileObj.url || fileObj.download_url || attachment.url || "";
+              // ✅ 优先使用原始文件名（filename 字段通常是原始文件名）
               const fileName = fileObj.filename || fileObj.name || attachment.name || attachment.filename || "file";
               const fileSize = fileObj.size || attachment.size;
               const fileId = fileObj.fileId || fileObj.file_id || attachment.fileId || attachment.file_id;
               const contentType = fileObj.mediaType || fileObj.file_type || attachment.mediaType || attachment.file_type;
+              // ✅ 支持缩略图URL
+              const thumbnailUrl = fileObj.thumbnailUrl || fileObj.thumbnail_url || (attachment as any).thumbnailUrl;
               
               return (
                 <PreviewAttachment
@@ -343,10 +226,12 @@ const PurePreviewMessage = ({
                     url: fileUrl,
                     size: fileSize,
                     fileId: fileId,
+                    thumbnailUrl: thumbnailUrl, // ✅ 传递缩略图URL
                   }}
                   isInMessage={true}
                   onDownload={() => {
                     // 下载文件：用户-用户模式直接下载，用户-Agent模式也支持下载
+                    // ✅ 下载时使用原始文件名
                     if (fileUrl) {
                       const link = document.createElement("a");
                       link.href = fileUrl;
@@ -730,57 +615,56 @@ export const ThinkingMessage = ({
   agentName?: string;
   selectedModelId?: string;
 }) => {
-  // 获取 chatModels 以查找 agent 的显示名称
+  // ✅ 标准化：ThinkingMessage 使用 selectedModelId 查找 Agent 显示名称和头像
+  // 确保与流式回复消息的渲染信息保持一致（流式传输开始时也使用 selectedModelId）
   const { models: chatModels } = useChatModels(false); // 总是加载 agents 列表，但不包含用户列表
   
-  // 优先使用传入的 agentName（如果已经是显示名称）
-  // 否则从 chatModels 查找 selectedModelId 对应的显示名称
-  let displayAgentName = agentName || "";
+  // 使用统一的思考消息渲染工具函数获取渲染信息
+  const renderInfo = getThinkingMessageRenderInfo(selectedModelId, chatModels);
   
-  // 如果 agentName 不存在或等于 selectedModelId（可能是 agent_id），从 chatModels 查找显示名称
-  if (!displayAgentName || displayAgentName === selectedModelId) {
-    if (selectedModelId && chatModels.length > 0) {
-      const foundAgent = chatModels.find(
-        (m) => m.type === "agent" && m.id === selectedModelId
-      );
-      displayAgentName = foundAgent?.name || selectedModelId || "智能体";
-    } else {
-      displayAgentName = selectedModelId || "智能体";
-    }
-  }
+  // 标准化：优先使用 renderInfo.senderName（从 selectedModelId 查找）
+  // 如果传入了 agentName 且不是 agent_id，优先使用（向后兼容）
+  const displayAgentName = agentName && agentName !== selectedModelId 
+    ? agentName 
+    : renderInfo.senderName;
   
-  // ✅ 最佳实践：思考消息使用 selectedModelId（agent_id），与流式回复消息的 metadata.agentUsed 一致
-  // 后端保证在流式响应开始时通过 metadata 事件传递 agent_id（metadata.agentUsed）
-  // 这个 agent_id 与请求中的 selectedChatModel（即 selectedModelId）一致
-  // 因此思考消息和流式回复消息使用相同的 agent_id，头像自然一致
-  const avatarSeed = selectedModelId || displayAgentName;
+  // 使用统一的 avatarSeed，确保与流式回复消息一致
+  const avatarSeed = renderInfo.avatarSeed;
   
   return (
     <div
-      className="group/message fade-in w-full animate-in duration-300"
+      className="group/message fade-in w-full animate-in duration-200"
       data-role="assistant"
       data-testid="message-assistant-loading"
+      style={{
+        // 确保与流式回复消息的样式完全一致
+        minHeight: "1px",
+        opacity: 1,
+        visibility: "visible" as const,
+      }}
     >
+      {/* ✅ 优化：使用与流式回复消息完全相同的布局结构 */}
       <div className="mx-auto flex w-full max-w-4xl items-start justify-start">
         <div className="flex items-start gap-2 md:gap-3 px-2 md:px-4">
+          {/* 头像区域：与流式回复消息完全一致 */}
           <div className="flex flex-col items-center gap-1 shrink-0">
-            <div className="animate-pulse">
-              <UnifiedAvatar
-                name={displayAgentName}
-                id={avatarSeed} // ✅ 使用 avatarSeed 确保与流式回复消息一致
-                isAgent={true}
-                size={32}
-              />
-            </div>
+            <UnifiedAvatar
+              name={displayAgentName}
+              id={avatarSeed} // ✅ 使用 avatarSeed 确保与流式回复消息一致
+              isAgent={true}
+              size={8} // ✅ 使用 size={8} 与流式回复消息一致（32px）
+            />
             <span className="text-muted-foreground text-xs max-w-[3rem] truncate text-center">
               {displayAgentName}
             </span>
           </div>
 
-          <div className="flex w-full flex-col gap-2 md:gap-4">
-            <div className="flex items-center gap-1 p-0 text-muted-foreground text-sm">
+          {/* 内容区域：与流式回复消息的布局结构一致 */}
+          <div className="flex flex-col flex-1 min-w-0 gap-2 md:gap-4">
+            {/* ✅ 优化：使用更平滑的思考动画，与消息内容区域样式一致 */}
+            <div className="flex items-center gap-1 text-muted-foreground text-sm">
               <span className="animate-pulse">思考中</span>
-              <span className="inline-flex">
+              <span className="inline-flex gap-0.5">
                 <span className="animate-bounce [animation-delay:0ms]">.</span>
                 <span className="animate-bounce [animation-delay:150ms]">.</span>
                 <span className="animate-bounce [animation-delay:300ms]">.</span>

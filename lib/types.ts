@@ -59,10 +59,12 @@ export type ChatMessage = UIMessage<
   ChatTools
 >;
 
+// ✅ TypeScript 5.5+ 类型定义（利用 React 19 类型推导减少冗余）
 export type Attachment = {
   name: string;
   url: string;
   contentType: string;
-  size?: number; // 文件大小（字节）
-  fileId?: string; // 文件唯一标识
+  size?: number;
+  fileId?: string;
+  thumbnailUrl?: string;
 };

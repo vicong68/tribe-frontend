@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { getBackendMemberId } from "@/lib/user-utils";
+import { fetchWithErrorHandlers } from "@/lib/utils";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
@@ -25,39 +26,61 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 调用后端 API 获取收藏列表
-    const response = await fetch(
-      `${BACKEND_URL}/api/collections?user_id=${encodeURIComponent(userId)}`,
-      {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
+    // 调用后端 API 获取收藏列表（带超时和错误处理）
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
+    
+    try {
+      const response = await fetchWithErrorHandlers(
+        `${BACKEND_URL}/api/collections?user_id=${encodeURIComponent(userId)}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          signal: controller.signal,
         },
-      }
-    );
+        {
+          maxRetries: 2,
+          retryDelay: 1000,
+        }
+      );
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      // 如果返回 404，说明后端接口可能还未实现或列表为空，返回空数组
-      if (response.status === 404) {
+      if (!response.ok) {
+        // 如果返回 404，说明后端接口可能还未实现或列表为空，返回空数组
+        if (response.status === 404) {
+          return NextResponse.json([]);
+        }
+        // 其他错误也返回空数组，避免前端报错
+        console.error("[Collections API] 获取收藏列表失败:", response.status, response.statusText);
         return NextResponse.json([]);
       }
-      // 其他错误也返回空数组，避免前端报错
-      console.error("[Collections API] 获取收藏列表失败:", response.status, response.statusText);
-      return NextResponse.json([]);
-    }
 
-    const data = await response.json();
-    // 后端返回格式：{ success: true, collections: [...] }
-    // 前端需要返回数组格式
-    if (data && Array.isArray(data.collections)) {
-      return NextResponse.json(data.collections);
+      const data = await response.json();
+      // 后端返回格式：{ success: true, collections: [...] }
+      // 前端需要返回数组格式
+      if (data && Array.isArray(data.collections)) {
+        return NextResponse.json(data.collections);
+      }
+      // 如果已经是数组格式，直接返回
+      if (Array.isArray(data)) {
+        return NextResponse.json(data);
+      }
+      // 默认返回空数组
+      return NextResponse.json([]);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === "AbortError") {
+        console.error("[Collections API] 请求超时");
+        return NextResponse.json([], { status: 504 });
+      }
+      console.error("[Collections API] Error:", error);
+      return NextResponse.json(
+        { error: "获取收藏列表失败" },
+        { status: 500 }
+      );
     }
-    // 如果已经是数组格式，直接返回
-    if (Array.isArray(data)) {
-      return NextResponse.json(data);
-    }
-    // 默认返回空数组
-    return NextResponse.json([]);
   } catch (error) {
     console.error("[Collections API] Error:", error);
     return NextResponse.json(

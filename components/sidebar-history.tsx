@@ -294,12 +294,14 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
             </Tooltip>
           )}
 
-          {/* 收藏过滤按钮 */}
-          {id && (
+          {/* 收藏过滤按钮 - 始终显示（只要有用户登录） */}
+          {user && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  className="h-7 px-2 shrink-0 min-w-[2rem]"
+                  className={`h-7 px-2 shrink-0 min-w-[2rem] ${
+                    showOnlyCollected ? "text-yellow-500 dark:text-yellow-400" : ""
+                  }`}
                   onClick={toggleCollectionFilter}
                   type="button"
                   variant="ghost"
@@ -313,7 +315,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                {showOnlyCollected ? "显示所有消息" : "仅显示收藏消息"}
+                {showOnlyCollected ? "显示所有对话" : "仅显示收藏的对话"}
               </TooltipContent>
             </Tooltip>
           )}

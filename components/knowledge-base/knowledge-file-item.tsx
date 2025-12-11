@@ -169,15 +169,15 @@ export function KnowledgeFileItem({
           </div>
           {viewMode === "grid" && (
             <>
-              <div className="mt-0.5 text-[10px] text-muted-foreground truncate">
-                {file.file_id}
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                {statusBadge}
-                <span className="text-[10px] text-muted-foreground">
-                  {formatFileSize(file.file_size)}
-                </span>
-              </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground truncate">
+            {file.file_id}
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            {statusBadge}
+            <span className="text-[10px] text-muted-foreground">
+              {formatFileSize(file.file_size)}
+            </span>
+          </div>
             </>
           )}
           {viewMode === "list" && (

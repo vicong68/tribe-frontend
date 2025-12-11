@@ -16,6 +16,9 @@ import {
   useRef,
   useState,
 } from "react";
+
+// ✅ Next.js 16 RequestDuplex 类型（fetch 原生支持）
+type RequestDuplex = "half" | "full";
 import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
@@ -189,19 +192,50 @@ function PureMultimodalInput({
     // 构建消息parts
     // 用户-用户模式：支持单独发文件（如果没有文本，可以不添加text part）
     // 用户-agent模式：必须有文本（已在上面验证）
-    const parts: Array<{ type: "file"; url: string; name: string; mediaType: string; size?: number; fileId?: string } | { type: "text"; text: string }> = [];
+    const parts: Array<{ 
+      type: "file"; 
+      url: string; 
+      name: string; 
+      mediaType: string; 
+      size?: number; 
+      fileId?: string;
+      thumbnailUrl?: string; // ✅ 包含缩略图URL
+    } | { type: "text"; text: string }> = [];
     
     // 添加文件parts
     if (hasFiles) {
       parts.push(
-        ...attachments.map((attachment) => ({
-          type: "file" as const,
-          url: attachment.url,
-          name: attachment.name,
-          mediaType: attachment.contentType,
-          size: attachment.size,
-          fileId: attachment.fileId,
-        }))
+        ...attachments.map((attachment) => {
+          // ✅ 构建 file part（过滤 null 值，只保留有效的 thumbnailUrl）
+          const filePart: {
+            type: "file";
+            url: string;
+            name: string;
+            mediaType: string;
+            size?: number;
+            fileId?: string;
+            thumbnailUrl?: string; // 只包含有效的字符串，null 会被过滤
+          } = {
+            type: "file" as const,
+            url: attachment.url,
+            name: attachment.name, // ✅ 使用原始文件名
+            mediaType: attachment.contentType,
+          };
+          
+          // 可选字段（只在存在时添加）
+          if (attachment.size !== undefined) {
+            filePart.size = attachment.size;
+          }
+          if (attachment.fileId) {
+            filePart.fileId = attachment.fileId;
+          }
+          // ✅ thumbnailUrl 只在非 null 时添加
+          if (attachment.thumbnailUrl) {
+            filePart.thumbnailUrl = attachment.thumbnailUrl;
+          }
+          
+          return filePart;
+        })
       );
     }
     
@@ -254,32 +288,166 @@ function PureMultimodalInput({
     session,
   ]);
 
+  // ✅ React 19 本地 Map 缓存：避免重复图片重复生成缩略图
+  const thumbnailCacheRef = useRef<Map<string, string>>(new Map());
+
+  /**
+   * React 19 客户端原生 createImageBitmap + Canvas 生成缩略图（极简高效）
+   * 100x100 尺寸适配消息框，JPEG 0.7 质量，本地 Map 缓存重复图片
+   */
+  const generateAndUploadThumbnail = useCallback(async (
+    file: File,
+    fileId: string
+  ): Promise<string | null> => {
+    if (!file.type.startsWith("image/")) {
+      console.log("[MultimodalInput] 跳过非图片文件:", file.type);
+      return null;
+    }
+
+    // ✅ 检查缓存（使用文件 hash 或 fileId）
+    const cacheKey = `${file.name}-${file.size}-${file.lastModified}`;
+    const cachedThumbnail = thumbnailCacheRef.current.get(cacheKey);
+    if (cachedThumbnail) {
+      console.log("[MultimodalInput] 使用缓存的缩略图:", cachedThumbnail);
+      return cachedThumbnail;
+    }
+
+    try {
+      console.log("[MultimodalInput] 开始生成缩略图，文件大小:", file.size);
+      // ✅ React 19 createImageBitmap（性能优于 Image + FileReader）
+      const bitmap = await createImageBitmap(file);
+      console.log("[MultimodalInput] createImageBitmap 成功，尺寸:", bitmap.width, "x", bitmap.height);
+      
+      // ✅ 100x100 尺寸适配消息框
+      const targetSize = 100;
+      const { width, height } = bitmap;
+      const ratio = Math.min(targetSize / width, targetSize / height);
+      const scaledWidth = Math.round(width * ratio);
+      const scaledHeight = Math.round(height * ratio);
+
+      // Canvas 生成缩略图
+      const canvas = document.createElement("canvas");
+      canvas.width = scaledWidth;
+      canvas.height = scaledHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        bitmap.close(); // ✅ 手动释放内存
+        return null;
+      }
+
+      ctx.drawImage(bitmap, 0, 0, scaledWidth, scaledHeight);
+      bitmap.close(); // ✅ React 19 手动释放 bitmap 内存
+
+      // ✅ JPEG 0.7 质量（极简优化）
+      const thumbnailDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+      console.log("[MultimodalInput] 缩略图生成完成，DataURL 长度:", thumbnailDataUrl.length);
+      
+      // ✅ 合并上传逻辑：直接转换为 Blob 并上传
+      const blob = await (await fetch(thumbnailDataUrl)).blob();
+      console.log("[MultimodalInput] Blob 创建成功，大小:", blob.size);
+      const formData = new FormData();
+      // ✅ 修复文件名：只使用 fileId 的最后一部分（避免路径和特殊字符）
+      const cleanFileId = fileId.split('/').pop()?.replace(/[^a-zA-Z0-9-_]/g, '_') || `thumb_${Date.now()}`;
+      formData.append("file", blob, `thumb_${cleanFileId}.jpg`);
+
+      console.log("[MultimodalInput] 开始上传缩略图...");
+      // ✅ Next.js 16 fetch 启用 duplex: 'half'
+      const uploadResponse = await fetch("/api/files/upload", {
+        method: "POST",
+        body: formData,
+        // @ts-expect-error - Next.js 16 原生支持 duplex
+        duplex: "half" as RequestDuplex,
+      });
+
+      if (uploadResponse.ok) {
+        const data = await uploadResponse.json();
+        const thumbnailUrl = data.url;
+        console.log("[MultimodalInput] ✅ 缩略图上传成功:", thumbnailUrl);
+        
+        // ✅ 缓存结果
+        if (thumbnailUrl) {
+          thumbnailCacheRef.current.set(cacheKey, thumbnailUrl);
+        }
+        
+        return thumbnailUrl;
+      } else {
+        const errorText = await uploadResponse.text();
+        console.error("[MultimodalInput] ❌ 缩略图上传失败:", uploadResponse.status, errorText);
+        return null;
+      }
+    } catch (error) {
+      console.error("[MultimodalInput] ❌ 生成/上传缩略图失败:", error);
+      if (error instanceof Error) {
+        console.error("[MultimodalInput] 错误详情:", error.message, error.stack);
+      }
+      return null;
+    }
+  }, []);
+
   const uploadFile = useCallback(async (file: File) => {
+    // ✅ 关键修复：在文件读取前先创建 File 副本，确保缩略图生成时可以读取
+    // FormData 会消耗 file 对象，需要在之前生成缩略图或创建副本
+    const isImage = file.type.startsWith("image/");
+    
+    // ✅ 如果是图片，先读取文件内容用于缩略图生成（在 FormData 消耗之前）
+    let fileForThumbnail: File | null = null;
+    if (isImage) {
+      try {
+        // 创建 File 副本：通过 ArrayBuffer 复制文件内容
+        const arrayBuffer = await file.arrayBuffer();
+        fileForThumbnail = new File([arrayBuffer], file.name, { type: file.type });
+      } catch (error) {
+        console.error("[MultimodalInput] 创建文件副本失败:", error);
+        // 如果复制失败，尝试直接使用原文件（可能在 FormData 读取前可用）
+        fileForThumbnail = file;
+      }
+    }
+
     const formData = new FormData();
     formData.append("file", file);
 
     try {
+      // ✅ Next.js 16 fetch 启用 duplex: 'half'
       const response = await fetch("/api/files/upload", {
         method: "POST",
         body: formData,
+        // @ts-expect-error - Next.js 16 原生支持 duplex
+        duplex: "half" as RequestDuplex,
       });
 
       if (response.ok) {
         const data = await response.json();
-        const { url, pathname, contentType, size, fileId } = data;
+        const { url, pathname, contentType, size, fileId, originalFilename } = data;
 
         // 验证返回数据的完整性
         if (!url) {
           throw new Error("服务器返回的文件URL为空");
         }
 
+        // ✅ 使用原始文件名（优先使用后端返回的 originalFilename）
+        const displayName = originalFilename || file.name;
+        const finalFileId = fileId || url;
+
+        // ✅ 合并生成+上传逻辑：如果是图片文件，生成并上传缩略图
+        let thumbnailUrl: string | null = null;
+        if (isImage && fileForThumbnail) {
+          console.log("[MultimodalInput] 开始生成缩略图:", file.name);
+          thumbnailUrl = await generateAndUploadThumbnail(fileForThumbnail, finalFileId);
+          if (thumbnailUrl) {
+            console.log("[MultimodalInput] ✅ 缩略图生成成功:", thumbnailUrl);
+          } else {
+            console.warn("[MultimodalInput] ⚠️ 缩略图生成返回 null");
+          }
+        }
+
         return {
           url,
-          name: pathname || file.name, // 优先使用后端返回的pathname，否则使用原始文件名
+          name: displayName,
           contentType: contentType || file.type || "application/octet-stream",
-          size: size || file.size, // 优先使用后端返回的size，否则使用file.size
-          fileId: fileId || url, // 优先使用后端返回的fileId，否则使用url作为标识
-        };
+          size: size || file.size,
+          fileId: finalFileId,
+          thumbnailUrl,
+        } satisfies Attachment;
       }
       
       // 处理错误响应

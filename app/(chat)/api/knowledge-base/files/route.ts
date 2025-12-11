@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { getBackendMemberId } from "@/lib/user-utils";
+import { fetchWithErrorHandlers } from "@/lib/utils";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
@@ -23,27 +24,46 @@ export async function GET(request: NextRequest) {
       params.append("folder_id", folderId);
     }
 
-    // 调用后端 API
-    const response = await fetch(
-      `${BACKEND_URL}/api/knowledge-base/files?${params.toString()}`,
-      {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
+    // 调用后端 API（带超时和错误处理）
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
+    
+    try {
+      const response = await fetchWithErrorHandlers(
+        `${BACKEND_URL}/api/knowledge-base/files?${params.toString()}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          signal: controller.signal,
         },
-      }
-    );
+        {
+          maxRetries: 2,
+          retryDelay: 1000,
+        }
+      );
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      if (response.status === 404) {
-        return NextResponse.json([]);
+      if (!response.ok) {
+        if (response.status === 404) {
+          return NextResponse.json([]);
+        }
+        console.error("[Knowledge Base Files API] 获取文件列表失败:", response.status);
+        return NextResponse.json([], { status: response.status });
       }
-      console.error("[Knowledge Base Files API] 获取文件列表失败:", response.status);
-      return NextResponse.json([], { status: response.status });
+
+      const data = await response.json();
+      return NextResponse.json(Array.isArray(data) ? data : []);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === "AbortError") {
+        console.error("[Knowledge Base Files API] 请求超时");
+        return NextResponse.json([], { status: 504 });
+      }
+      console.error("[Knowledge Base Files API] Error:", error);
+      return NextResponse.json([], { status: 500 });
     }
-
-    const data = await response.json();
-    return NextResponse.json(Array.isArray(data) ? data : []);
   } catch (error) {
     console.error("[Knowledge Base Files API] Error:", error);
     return NextResponse.json([], { status: 500 });

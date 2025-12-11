@@ -158,25 +158,25 @@ export function KnowledgeFolderItem({
       {/* 工具栏图标（hover 显示，确保在最上层） */}
       {showActions && (
         <div className="relative z-50">
-          <KnowledgeFolderActions
-            folder={folder}
-            isCollecting={isCollecting}
-            onToggleCollect={onToggleCollect}
-            onDelete={onDelete}
-            onEdit={onEdit}
-            onCreateChild={onCreateChild}
-            onMove={onMove}
-            onShare={onShare}
-            onAddToContext={onAddToContext}
-            onExport={onExport}
-            onMenuToggle={(open) => {
-              setMenuOpen(open);
-              if (open) {
-                setShowActions(true);
-              }
-            }}
-            onContainerClick={(e) => e.stopPropagation()}
-          />
+        <KnowledgeFolderActions
+          folder={folder}
+          isCollecting={isCollecting}
+          onToggleCollect={onToggleCollect}
+          onDelete={onDelete}
+          onEdit={onEdit}
+          onCreateChild={onCreateChild}
+          onMove={onMove}
+          onShare={onShare}
+          onAddToContext={onAddToContext}
+          onExport={onExport}
+          onMenuToggle={(open) => {
+            setMenuOpen(open);
+            if (open) {
+              setShowActions(true);
+            }
+          }}
+          onContainerClick={(e) => e.stopPropagation()}
+        />
         </div>
       )}
     </div>

@@ -52,31 +52,44 @@ export const PreviewAttachment = ({
   onDownload?: () => void;
   isInMessage?: boolean; // 消息中的附件支持下载
 }) => {
-  const { name, url, contentType, size } = attachment;
+  const { name, url, contentType, size, thumbnailUrl } = attachment;
   const isImage = contentType?.startsWith("image/");
   const fileTypeInfo = getFileTypeInfo(contentType, name);
   const fileSizeStr = formatFileSize(size);
 
   const IconComponent = fileTypeInfo.icon;
 
+  // ✅ 图片优先使用缩略图，提升加载性能和滚动流畅度
+  const imageSrc = isImage && thumbnailUrl ? thumbnailUrl : (isImage ? url : undefined);
+
   return (
     <div
       className={cn(
         "group relative overflow-hidden rounded-lg border bg-muted",
-        isInMessage ? "w-full max-w-xs" : "size-16",
-        isImage && !isInMessage && "size-16"
+        // ✅ Tailwind CSS 原子类 + aspect-ratio 自适应尺寸
+        isInMessage ? "w-full max-w-xs" : "size-16"
       )}
       data-testid="input-attachment-preview"
     >
-      {isImage ? (
-        // 图片类型：显示缩略图（极简风格）
-        <Image
-          alt={name ?? "An image attachment"}
-          className="size-full object-cover"
-          height={isInMessage ? 200 : 64}
-          src={url}
-          width={isInMessage ? 300 : 64}
-        />
+      {isImage && imageSrc ? (
+        // ✅ Next.js 16 Image 组件原生懒加载+内置模糊占位（无需自定义）
+        // ✅ 修复：父容器必须设置明确的高度或使用 aspect-ratio，fill 才能正常工作
+        <div className={cn(
+          "relative w-full",
+          isInMessage ? "aspect-video min-h-[200px]" : "aspect-square h-16"
+        )}>
+          <Image
+            alt={name ?? "An image attachment"}
+            className="object-cover"
+            fill
+            src={imageSrc}
+            loading="lazy"
+            quality={thumbnailUrl ? 75 : 90}
+            placeholder="blur"
+            blurDataURL="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAIAAoDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAhEAACAQMDBQAAAAAAAAAAAAABAgMABAUGIWGRkqGx0f/EABUBAQEAAAAAAAAAAAAAAAAAAAMF/8QAGhEAAgIDAAAAAAAAAAAAAAAAAAECEgMRkf/aAAwDAQACEQMRAD8AltJagyeH0AthI5xdrLcNM91BF5pX2HaH9bcfaSXWGaRmknyJckliyjqTzSlT54b6bk+h0R//2Q=="
+            sizes={isInMessage ? "(max-width: 768px) 100vw, 320px" : "64px"}
+          />
+        </div>
       ) : (
         // 其他文件类型：显示文件metadata占位（极简风格）
         <div

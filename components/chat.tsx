@@ -129,6 +129,40 @@ export function Chat({
         setUsage(dataPart.data);
       }
       
+      // ✅ 处理后端保存成功通知
+      if (dataPart.type === "data-persisted" && dataPart.data?.persisted === true) {
+        const messageId = dataPart.data?.messageId || messagesRef.current[messagesRef.current.length - 1]?.id;
+        if (messageId) {
+          backendPersistedMessageIdsRef.current.add(messageId);
+          if (process.env.NODE_ENV === "development") {
+            console.log(`[Chat] ✅ 后端已保存: ${messageId.slice(0, 8)}...`);
+          }
+        }
+      }
+      
+      // ✅ 优化：处理后端发送的 metadata 事件，确保在流式传输过程中正确更新消息的 metadata
+      // 后端在流式响应开始时通过 data-message-metadata 事件传递 agentUsed 和 senderName
+      // AI SDK 会自动将 metadata 事件更新到消息中，但我们需要确保消息能正确渲染
+      if (
+        dataPart.type === "metadata" || 
+        dataPart.type === "data-message-metadata" ||
+        (dataPart.type === "data" && dataPart.data?.type === "data-message-metadata")
+      ) {
+        const metadata = dataPart.type === "metadata" || dataPart.type === "data-message-metadata" 
+          ? dataPart 
+          : dataPart.data;
+        if (metadata && typeof metadata === "object") {
+          // metadata 事件已由 AI SDK 自动处理，这里只需要记录日志（开发环境）
+          if (process.env.NODE_ENV === "development") {
+            console.log(`[Chat] 📝 收到 metadata 事件:`, {
+              agentUsed: metadata.agentUsed,
+              senderName: metadata.senderName,
+              communicationType: metadata.communicationType,
+            });
+          }
+        }
+      }
+      
       // 用户-用户消息不需要流式状态（消息已通过SSE实时推送）
       const lastMessage = messagesRef.current[messagesRef.current.length - 1];
       const isUserToUser = lastMessage?.metadata?.communicationType === "user_user";
@@ -183,12 +217,16 @@ export function Chat({
     chatId: id,
     messages,
   });
-  
+
   // 保存 saveAssistantMessages 到 ref，以便在 onFinish 中使用（避免闭包问题）
   const saveAssistantMessagesRef = useRef(saveAssistantMessages);
   useEffect(() => {
     saveAssistantMessagesRef.current = saveAssistantMessages;
   }, [saveAssistantMessages]);
+
+  // ✅ 消息保存策略：优先使用后端保存，前端保存作为备用（默认禁用）
+  const backendPersistedMessageIdsRef = useRef<Set<string>>(new Set());
+  const ENABLE_FRONTEND_SAVE = false; // 设置为 true 可启用前端保存（调试用）
 
   // 获取 SSE 消息上下文（用于接收用户-用户消息）
   const { onMessage: onSSEMessage, isConnected: sseConnected } = useSSEMessageContext();
@@ -267,34 +305,28 @@ export function Chat({
     messagesRef.current = messages;
   }, [messages]);
 
-  // 流式响应完成后保存 assistant 消息
-  // 使用 useEffect 监听 status 变化，确保使用最新的 messages 状态
-  // 符合 Vercel AI SDK 最佳实践：在流式响应完成后保存消息
-  // 记录上一次的流式状态，用于检测 streaming 结束
+  // ✅ 流式响应完成后的保存逻辑（默认禁用，优先使用后端保存）
   const prevStatusRef = useRef(status);
   useEffect(() => {
-    const currentStatus = status;
-    // 当状态从 "streaming" 变为非 "streaming" 时，保存 assistant 消息
-    if (prevStatusRef.current === "streaming" && currentStatus !== "streaming") {
-      // 使用最新的 messages 状态，而不是 ref
-      const assistantMessages = messages.filter((msg) => msg.role === "assistant");
-      
-      if (assistantMessages.length > 0) {
-        // 延迟一小段时间，确保 AI SDK 已完全更新 messages 状态
-        // 使用 setTimeout 确保在下一个事件循环中执行
-        const timeoutId = setTimeout(() => {
-          saveAssistantMessagesRef.current(assistantMessages).catch((error) => {
-            if (process.env.NODE_ENV === "development") {
-              console.error("[Chat] Failed to save messages on finish:", error);
-            }
-          });
-        }, 100);
-        
-        return () => clearTimeout(timeoutId);
-      }
-    }
+    const isStatusChanged = prevStatusRef.current === "streaming" && status !== "streaming";
+    prevStatusRef.current = status;
     
-    prevStatusRef.current = currentStatus;
+    if (!isStatusChanged || !ENABLE_FRONTEND_SAVE) {
+      return; // 前端保存已禁用
+    }
+
+    // 仅在前端保存启用时执行（调试模式）
+    const unsavedMessages = messages
+      .filter((msg) => msg.role === "assistant" && !backendPersistedMessageIdsRef.current.has(msg.id));
+    
+    if (unsavedMessages.length > 0) {
+      console.warn(`[Chat] ⚠️  前端保存（调试模式）: ${unsavedMessages.length} 条消息`);
+      setTimeout(() => {
+        saveAssistantMessagesRef.current(unsavedMessages).catch((error) => {
+          console.error("[Chat] 前端保存失败:", error);
+        });
+      }, 100);
+    }
   }, [status, messages]);
 
   // 处理 SSE 中的用户-用户消息
@@ -358,12 +390,42 @@ export function Chat({
       
       // 添加文件附件（如果有）
       if (sseMessage.file_attachment) {
-        parts.push({
+        const fileAttachment = sseMessage.file_attachment;
+        // ✅ 完整映射文件附件字段，支持多种字段名（向后兼容）
+        const filePart: any = {
           type: "file" as const,
-          url: sseMessage.file_attachment.download_url || sseMessage.file_attachment.file_id,
-          name: sseMessage.file_attachment.file_name || "file",
-          mediaType: sseMessage.file_attachment.file_type || "application/octet-stream",
-        });
+          // URL：优先使用 download_url，其次使用 file_id 构建 URL
+          url: fileAttachment.download_url || 
+               (fileAttachment.file_id ? `/api/files/download/${fileAttachment.file_id}` : "") ||
+               fileAttachment.url || "",
+          // ✅ 文件名：优先使用 filename（后端标准字段），其次使用 file_name（兼容字段）
+          name: fileAttachment.filename || 
+                fileAttachment.file_name || 
+                fileAttachment.name || 
+                "file",
+          // ✅ MIME 类型
+          mediaType: fileAttachment.file_type || 
+                     fileAttachment.mediaType || 
+                     fileAttachment.contentType || 
+                     "application/octet-stream",
+        };
+        
+        // ✅ 文件大小（可选）
+        if (fileAttachment.size !== undefined && fileAttachment.size !== null) {
+          filePart.size = fileAttachment.size;
+        }
+        
+        // ✅ 文件ID（可选，用于下载）
+        if (fileAttachment.file_id) {
+          filePart.fileId = fileAttachment.file_id;
+        }
+        
+        // ✅ 缩略图URL（可选，仅图片文件）
+        if (fileAttachment.thumbnail_url || fileAttachment.thumbnailUrl) {
+          filePart.thumbnailUrl = fileAttachment.thumbnail_url || fileAttachment.thumbnailUrl;
+        }
+        
+        parts.push(filePart);
       }
       
       // 添加文本内容（如果有）

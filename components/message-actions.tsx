@@ -6,7 +6,7 @@ import { useCopyToClipboard } from "usehooks-ts";
 import { useSession } from "next-auth/react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
-import { cn, generateUUID } from "@/lib/utils";
+import { cn, generateUUID, formatMessageTimestamp } from "@/lib/utils";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useChatModels } from "@/lib/ai/models-client";
 import { Action, Actions } from "./elements/actions";
@@ -471,6 +471,10 @@ export function PureMessageActions({
   const isUser = message.role === "user";
   const actionButtonClass = "opacity-0 transition-opacity focus-visible:opacity-100 group-hover/message:opacity-100";
   
+  // 获取消息时间戳
+  const messageTimestamp = message.metadata?.createdAt;
+  const formattedTimestamp = formatMessageTimestamp(messageTimestamp);
+  
   return (
     <Actions className={cn(
       isUser ? "justify-end" : "justify-start"
@@ -573,6 +577,13 @@ export function PureMessageActions({
       {/* 右侧：本地用户消息 */}
       {isUser && (
         <>
+          {/* 时间戳 - 右侧工具栏最左边 */}
+          {formattedTimestamp && (
+            <span className="text-xs text-muted-foreground/60 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/message:opacity-100 mr-1">
+              {formattedTimestamp}
+            </span>
+          )}
+          
           {/* 复制按钮 */}
           <Action
             className={actionButtonClass}
@@ -754,6 +765,14 @@ export function PureMessageActions({
           >
             <ThumbDownIcon />
           </Action>
+          
+          {/* ✅ 时间戳 - 左侧工具栏最右边（点踩按钮之后） */}
+          {/* 注意：此块在 assistant 消息内，无需检查 !isUser */}
+          {formattedTimestamp && (
+            <span className="text-xs text-muted-foreground/60 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/message:opacity-100 ml-1">
+              {formattedTimestamp}
+            </span>
+          )}
         </>
       )}
     </Actions>

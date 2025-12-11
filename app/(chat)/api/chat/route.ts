@@ -17,7 +17,7 @@ import { generateSessionId } from "@/lib/session-utils";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { convertToUIMessages, generateUUID, getTextFromMessage, isValidUUID, fetchWithErrorHandlers } from "@/lib/utils";
-import { generateTitleFromUserMessage } from "../../actions";
+import { generateTitleFromUserMessage, updateChatTitleAsync } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 import { entityCache } from "@/lib/cache/entity-cache";
 import { z } from "zod";
@@ -194,27 +194,47 @@ export async function POST(request: Request) {
       const hasFileAttachments = messageParts.some((part) => part.type === "file");
       const messageText = getTextFromMessage(message);
       
+      // ✅ 优化：使用轻量级标题作为默认（快速、不阻塞）
+      // 然后异步更新为 AI 生成的标题（备用方案）
       let title = "新对话";
+      const backendMemberId = session.user.type === "guest" 
+        ? "guest_user"
+        : (session.user.memberId || session.user.email?.split("@")[0] || session.user.id);
+      
       // 验证消息文本不为空（如果有文件附件但没有文本，也跳过标题生成）
       if (messageText && messageText.trim().length > 0) {
         try {
-          // 生成临时 conversationId 用于标题生成
-          // 注意：标题生成使用后端 member_id 确保一致性
-          // 使用标准格式：title_{user_id}_{timestamp}（临时会话，不参与对话记忆）
-          const backendMemberId = session.user.type === "guest" 
-            ? "guest_user"
-            : (session.user.memberId || session.user.email?.split("@")[0] || session.user.id);
-          // 标准格式：title_{user_id}_{timestamp}（临时会话ID，用于标题生成）
-          const titleConversationId = `title_${backendMemberId}_${Date.now()}`;
-          
+          // 1. 使用轻量级标题生成（快速、不阻塞主流程）
           title = await generateTitleFromUserMessage({
-        message,
-            userId: backendMemberId, // 使用后端 member_id
+            message,
+            userId: backendMemberId,
+            lightweight: true, // 使用轻量级模式
+          });
+          
+          console.log("[Chat API] 轻量级标题生成完成:", {
+            chatId: id,
+            title,
+            messagePreview: messageText.substring(0, 50) + (messageText.length > 50 ? "..." : ""),
+          });
+          
+          // 2. 异步更新为 AI 生成的标题（不阻塞主流程）
+          const titleConversationId = `title_${backendMemberId}_${Date.now()}`;
+          updateChatTitleAsync({
+            chatId: id,
+            message,
+            userId: backendMemberId,
             conversationId: titleConversationId,
           });
         } catch (error) {
+          console.error("[Chat API] ❌ 轻量级标题生成异常:", {
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            chatId: id,
+          });
           title = "新对话";
         }
+      } else {
+        console.log("[Chat API] 消息文本为空或仅有文件，跳过标题生成");
       }
 
       try {
@@ -420,7 +440,8 @@ export async function POST(request: Request) {
     const backendRequestBody: any = {
       messages: allMessages,
       member_id: backendMemberId, // 使用后端用户 ID
-      conversation_id: sessionId, // 使用统一的 session_id 格式
+      conversation_id: sessionId, // 使用统一的 session_id 格式（用于对话记忆）
+      chat_id: id, // ✅ 传递真实的 Chat 表 UUID（用于消息持久化）
       login_status: loginStatus, // 从 session 获取实际登录状态
       stream: true,
       use_knowledge_base: false,
@@ -623,7 +644,16 @@ export async function POST(request: Request) {
         } catch (error) {
           // 静默处理错误，不影响流式响应
         } finally {
-          writer.close();
+          // ✅ 修复：安全关闭 writer，避免重复关闭已关闭的流
+          try {
+            // 检查 writer 是否仍然有效（desiredSize 为 null 表示流已关闭）
+            if (writer && writer.desiredSize !== null) {
+              await writer.close();
+            }
+          } catch (closeError) {
+            // 流可能已经关闭或出现其他错误，静默处理
+            // 这不会影响主流程，因为流可能已经被其他地方关闭
+          }
         }
       })();
       

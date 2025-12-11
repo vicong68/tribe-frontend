@@ -5,7 +5,7 @@ import type {
   UIMessagePart,
 } from 'ai';
 import { type ClassValue, clsx } from 'clsx';
-import { formatISO } from 'date-fns';
+import { formatISO, format, isToday, differenceInMinutes, differenceInHours, differenceInDays } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import type { DBMessage, Document } from '@/lib/db/schema';
 import { ChatSDKError, type ErrorCode } from './errors';
@@ -131,6 +131,57 @@ export function generateUUID(): string {
 }
 
 /**
+ * 格式化消息时间戳为简洁格式
+ * 采用通用的过去时间显示策略：
+ * - 今天：AM 9:33、PM 4:55
+ * - 30 分钟内：30m ago
+ * - 1 小时内：1h ago
+ * - 1 天内：2h ago
+ * - 7 天内：2d ago
+ * - 超过 7 天：Jan 15
+ */
+export function formatMessageTimestamp(timestamp: string | Date | undefined | null): string {
+  if (!timestamp) return "";
+  
+  try {
+    const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+    if (isNaN(date.getTime())) return "";
+    
+    const now = new Date();
+    
+    // 如果是今天，显示 AM/PM 格式
+    if (isToday(date)) {
+      return format(date, "a h:mm").toUpperCase();
+    }
+    
+    // 计算时间差（使用统一的过去时间显示策略）
+    const minutes = differenceInMinutes(now, date);
+    const hours = differenceInHours(now, date);
+    const days = differenceInDays(now, date);
+    
+    // 小于 1 小时：显示分钟数
+    if (minutes < 60) {
+      return `${minutes}m ago`;
+    }
+    
+    // 小于 24 小时（1 天内）：显示小时数
+    if (hours < 24) {
+      return `${hours}h ago`;
+    }
+    
+    // 小于 7 天：显示天数
+    if (days < 7) {
+      return `${days}d ago`;
+    }
+    
+    // 超过 7 天：显示日期（如 Jan 15）
+    return format(date, "MMM d");
+  } catch (error) {
+    return "";
+  }
+}
+
+/**
  * 验证字符串是否为有效的 UUID 格式
  * UUID 格式：xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
  */
@@ -178,12 +229,15 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   // 所有消息都应该有完整的 metadata（无 metadata 的消息已在数据库层面清理）
   return messages.map((message) => {
     // 确保 parts 是数组，如果为空或无效则使用空数组
-    let parts = message.parts;
-    if (!Array.isArray(parts)) {
+    let parts: any[] = [];
+    if (Array.isArray(message.parts)) {
+      parts = message.parts;
+    } else {
       // 如果 parts 不是数组，尝试解析（可能是 JSON 字符串）
       try {
-        if (typeof parts === "string") {
-          parts = JSON.parse(parts);
+        if (typeof message.parts === "string") {
+          const parsed = JSON.parse(message.parts);
+          parts = Array.isArray(parsed) ? parsed : [];
         } else {
           parts = [];
         }
@@ -197,6 +251,7 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
     // 尝试从 data 字段中解析出实际的消息内容
     // 注意：只提取 assistant 消息的 parts，忽略 user 消息的内容
     const cleanedParts: any[] = [];
+    // parts 已经在上面处理过，确保是数组
     for (const part of parts) {
       if (part && typeof part === 'object') {
         // 检查是否是错误格式的 data-appendMessage 事件
@@ -300,6 +355,82 @@ export function convertToDBMessages(
         : new Date(),
     };
   });
+}
+
+/**
+ * 轻量级标题生成（无需调用后端，快速生成）
+ * 规则：
+ * 1. 提取消息前 50 个字符
+ * 2. 去除标点符号和特殊字符
+ * 3. 如果包含问号，提取问号前的内容
+ * 4. 如果包含常见问题词（什么、如何、为什么、怎么等），提取关键词
+ * 5. 限制长度在 20-30 字符
+ */
+export function generateLightweightTitle(messageText: string): string {
+  if (!messageText || !messageText.trim()) {
+    return "新对话";
+  }
+
+  let text = messageText.trim();
+  
+  // 如果包含问号，提取问号前的内容
+  const questionIndex = text.indexOf("？") !== -1 ? text.indexOf("？") : text.indexOf("?");
+  if (questionIndex !== -1 && questionIndex > 0) {
+    text = text.substring(0, questionIndex).trim();
+  }
+  
+  // 提取前 50 个字符
+  if (text.length > 50) {
+    text = text.substring(0, 50);
+  }
+  
+  // 去除常见的标点符号和特殊字符（保留中文、英文、数字、空格）
+  text = text.replace(/[，。！？：；、""''（）【】《》〈〉「」『』【】]/g, " ");
+  text = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, " ");
+  text = text.replace(/\s+/g, " ").trim();
+  
+  // 如果包含常见问题词，尝试提取关键词
+  const questionWords = ["什么", "如何", "为什么", "怎么", "怎样", "能否", "可以", "能否", "请", "帮我"];
+  let foundQuestionWord = false;
+  for (const word of questionWords) {
+    if (text.includes(word)) {
+      foundQuestionWord = true;
+      // 提取问题词后的内容
+      const index = text.indexOf(word);
+      if (index !== -1 && index + word.length < text.length) {
+        text = text.substring(index + word.length).trim();
+      }
+      break;
+    }
+  }
+  
+  // 如果提取后为空，使用原始文本的前 30 个字符
+  if (!text) {
+    text = messageText.trim().substring(0, 30);
+    text = text.replace(/[，。！？：；、""''（）【】《》〈〉「」『』【】]/g, " ");
+    text = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, " ").trim();
+  }
+  
+  // 限制长度在 20-30 字符之间
+  const maxLength = 30;
+  const minLength = 20;
+  if (text.length > maxLength) {
+    // 尝试在空格处截断
+    const truncated = text.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(" ");
+    if (lastSpace > minLength) {
+      text = truncated.substring(0, lastSpace);
+    } else {
+      text = truncated;
+    }
+  }
+  
+  // 如果太短，补充省略号
+  if (text.length < minLength && messageText.length > text.length) {
+    text = text + "...";
+  }
+  
+  return text || "新对话";
 }
 
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {

@@ -52,6 +52,17 @@ const dbUrl = process.env.POSTGRES_URL.replace(/\?schema=[^&]*/, "").replace(/&s
 const client = postgres(dbUrl, {
   // 设置默认 schema 为 ai
   search_path: "ai",
+  // 连接池配置：防止 "too many clients" 错误
+  max: 10, // 最大连接数（根据实际需求调整，建议 5-20）
+  idle_timeout: 20, // 空闲连接超时（秒），20秒后关闭空闲连接
+  max_lifetime: 60 * 30, // 连接最大生命周期（秒），30分钟后强制关闭连接
+  connect_timeout: 10, // 连接超时（秒）
+  // 连接池行为
+  prepare: false, // 禁用 prepared statements（在某些情况下可以提高性能）
+  // 错误处理
+  onnotice: () => {}, // 忽略 notice 消息
+  // 开发环境调试
+  debug: process.env.NODE_ENV === "development" ? false : false, // 设置为 true 可查看 SQL 查询
 });
 
 const db = drizzle(client, { schema: undefined }); // Drizzle 会自动使用 search_path
@@ -60,11 +71,31 @@ const db = drizzle(client, { schema: undefined }); // Drizzle 会自动使用 se
 if (process.env.NODE_ENV === "development") {
   client`SELECT 1`.catch((error) => {
     console.error("[Database] ❌ Failed to connect to database:", error.message);
-    console.error("[Database] 💡 Make sure PostgreSQL is running:");
-    console.error("[Database]    sudo systemctl start postgresql");
-    console.error("[Database]    or");
-    console.error("[Database]    docker-compose up -d postgres");
+    if (error.message.includes("too many clients")) {
+      console.error("[Database] ⚠️ 连接池已满，请检查是否有连接泄漏");
+      console.error("[Database] 💡 建议：");
+      console.error("[Database]    1. 检查是否有未关闭的数据库连接");
+      console.error("[Database]    2. 增加 PostgreSQL max_connections 配置");
+      console.error("[Database]    3. 减少前端连接池大小（当前 max: 10）");
+    } else {
+      console.error("[Database] 💡 Make sure PostgreSQL is running:");
+      console.error("[Database]    sudo systemctl start postgresql");
+      console.error("[Database]    or");
+      console.error("[Database]    docker-compose up -d postgres");
+    }
   });
+}
+
+// 优雅关闭：在进程退出时关闭所有连接
+if (typeof process !== "undefined") {
+  const gracefulShutdown = () => {
+    console.log("[Database] 🔄 Closing database connections...");
+    client.end({ timeout: 5 });
+  };
+  
+  process.on("SIGINT", gracefulShutdown);
+  process.on("SIGTERM", gracefulShutdown);
+  process.on("exit", gracefulShutdown);
 }
 
 export async function getUser(email: string): Promise<User[]> {
@@ -675,6 +706,23 @@ export async function updateChatVisibilityById({
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to update chat visibility by id"
+    );
+  }
+}
+
+export async function updateChatById({
+  id,
+  title,
+}: {
+  id: string;
+  title: string;
+}) {
+  try {
+    return await db.update(chat).set({ title }).where(eq(chat.id, id));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to update chat title by id"
     );
   }
 }

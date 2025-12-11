@@ -12,6 +12,46 @@ const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
 
 /**
+ * 处理转义字符的工具函数
+ */
+function unescapeText(text: string): string {
+  return text
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, '"')
+    .replace(/\\t/g, "\t")
+    .replace(/\\\\/g, "\\");
+}
+
+/**
+ * 创建完成事件响应对象
+ */
+function createFinishResponse(
+  text: string,
+  finishReason: "stop" | "length" | "content-filter" | "tool-calls" | "error" | "other",
+  usage: { promptTokens: number; completionTokens: number },
+  responseId: string,
+  agentName: string,
+  timestamp?: Date
+) {
+  return {
+    finishReason,
+    usage,
+    content: [{ type: "text" as const, text }],
+    response: {
+      id: responseId,
+      timestamp: timestamp || new Date(),
+      model: agentName,
+      provider: "backend" as const,
+    },
+    rawCall: {
+      rawPrompt: null,
+      rawSettings: {},
+    },
+    warnings: [] as string[],
+  };
+}
+
+/**
  * 创建后端语言模型包装器
  * @param agentName Agent 名称（如：司仪、书吏、猎手等）
  */
@@ -222,11 +262,33 @@ export function createBackendLanguageModel(
 
       // 收集所有文本内容
       let text = "";
+      let finishEventReceived = false;
+      let finishReason: "stop" | "length" | "content-filter" | "tool-calls" | "error" | "other" = "stop";
+      let usage = {
+        promptTokens: 0,
+        completionTokens: 0,
+      };
+      let responseId = "unknown";
+      
       const reader = streamResult.stream.getReader();
       const decoder = new TextDecoder();
+      
+      // 添加超时机制（30秒，标题生成应该很快）
+      const timeout = 30000; // 30秒
+      const startTime = Date.now();
+      
+      if (process.env.NODE_ENV === "development") {
+        console.log(`[backend-model] 🔄 开始 doGenerate (agent: ${agentName})`);
+      }
 
       try {
         while (true) {
+          // 检查超时
+          if (Date.now() - startTime > timeout) {
+            console.error(`[backend-model] ⚠️ 生成超时 (${timeout}ms), agent: ${agentName}, textSoFar: ${text.substring(0, 50)}`);
+            break;
+          }
+          
           const { done, value } = await reader.read();
           if (done) break;
           
@@ -235,71 +297,122 @@ export function createBackendLanguageModel(
           const lines = chunk.split("\n");
           
           for (const line of lines) {
+            if (!line.trim()) continue; // 跳过空行
+            
             if (line.startsWith("data: ")) {
               const data = line.slice(6);
-              // 解析 AI SDK Data Stream Protocol 格式
-              // data: 0:"text" 或 data: d:{"finishReason":"stop",...}
+              
+              // 解析完成事件（Data Stream Protocol 格式：d:{...}）
               if (data.startsWith('d:')) {
-                // 完成事件
                 try {
                   const finishData = JSON.parse(data.slice(2));
-                  return {
-                    finishReason: finishData.finishReason || "stop",
-                    usage: finishData.usage || {
-                      promptTokens: 0,
-                      completionTokens: 0,
-                    },
-                    content: [{ type: "text", text: finishData.text || text }],
-                    response: {
-                      id: finishData.id || "unknown",
-                      timestamp: finishData.timestamp || new Date(),
-                      model: agentName,
-                      provider: "backend",
-                    },
-                    rawCall: {
-                      rawPrompt: null,
-                      rawSettings: {},
-                    },
-                    warnings: [],
-                  };
-                } catch {
-                  // 忽略解析错误
+                  finishEventReceived = true;
+                  finishReason = (finishData.finishReason || "stop") as typeof finishReason;
+                  usage = finishData.usage || usage;
+                  responseId = finishData.id || responseId;
+                  
+                  return createFinishResponse(
+                    finishData.text || text || "",
+                    finishReason,
+                    usage,
+                    responseId,
+                    agentName,
+                    finishData.timestamp ? new Date(finishData.timestamp) : undefined
+                  );
+                } catch (parseError) {
+                  console.error(`[backend-model] ⚠️ 解析完成事件失败:`, {
+                    error: parseError,
+                    data: data.slice(0, 200),
+                    agent: agentName,
+                  });
                 }
-              } else if (data.match(/^\d+:"/)) {
-                // 文本增量：0:"text"
-                const match = data.match(/^\d+:"(.+)"$/);
+              } 
+              // 解析 JSON SSE 格式：{"type": "finish" | "text-delta" | "text", ...}
+              else if (data.trim().startsWith('{')) {
+                try {
+                  const jsonData = JSON.parse(data);
+                  if (jsonData.type === "finish") {
+                    finishEventReceived = true;
+                    finishReason = (jsonData.finishReason || "stop") as typeof finishReason;
+                    usage = jsonData.usage || usage;
+                    responseId = jsonData.id || responseId;
+                    
+                    return createFinishResponse(
+                      text || "",
+                      finishReason,
+                      usage,
+                      responseId,
+                      agentName,
+                      jsonData.timestamp ? new Date(jsonData.timestamp) : undefined
+                    );
+                  } else if (jsonData.type === "text-delta" && jsonData.textDelta) {
+                    text += jsonData.textDelta;
+                  } else if (jsonData.type === "text" && jsonData.text) {
+                    text = jsonData.text;
+                  }
+                } catch (parseError) {
+                  if (process.env.NODE_ENV === "development") {
+                    console.warn(`[backend-model] ⚠️ 无法解析 JSON 数据:`, {
+                      error: parseError,
+                      data: data.substring(0, 100),
+                      agent: agentName,
+                    });
+                  }
+                }
+              } 
+              // 解析文本增量（Data Stream Protocol 格式：0:"text"）
+              else if (data.match(/^\d+:"/)) {
+                // 文本增量：0:"text" 或 0:"text\nmore"（Data Stream Protocol 格式）
+                const match = data.match(/^\d+:"(.+)"$/s) || data.match(/^\d+:"([\s\S]*?)"$/);
                 if (match) {
-                  // 处理转义字符
-                  text += match[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+                  text += unescapeText(match[1]);
+                } else if (process.env.NODE_ENV === "development") {
+                  console.warn(`[backend-model] ⚠️ 无法解析文本增量:`, {
+                    data: data.substring(0, 100),
+                    agent: agentName,
+                  });
                 }
               }
             }
           }
         }
+      } catch (error) {
+        console.error(`[backend-model] ❌ 流式读取异常:`, {
+          error: error instanceof Error ? error.message : String(error),
+          agent: agentName,
+          textSoFar: text.substring(0, 100),
+        });
+        throw error; // 重新抛出错误
       } finally {
         reader.releaseLock();
       }
 
-      // 如果没有收到完成事件，返回收集的文本
-      return {
-        finishReason: "stop" as const,
-        usage: {
-          promptTokens: 0,
-          completionTokens: 0,
-        },
-        content: [{ type: "text", text }],
-        response: {
-          id: "unknown",
-          timestamp: new Date(),
-          model: agentName,
-          provider: "backend",
-        },
-        rawCall: {
-          rawPrompt: null,
-          rawSettings: {},
-        },
-        warnings: [],
-      };
+      // 如果没有收到完成事件但有文本，返回收集的文本
+      if (text) {
+        const duration = Date.now() - startTime;
+        console.log(`[backend-model] ✅ 流式完成，未收到完成事件但有文本 (${text.length} chars, ${duration}ms), agent: ${agentName}`);
+        return {
+          finishReason: finishEventReceived ? finishReason : "stop",
+          usage,
+          content: [{ type: "text", text }],
+          response: {
+            id: responseId,
+            timestamp: new Date(),
+            model: agentName,
+            provider: "backend",
+          },
+          rawCall: {
+            rawPrompt: null,
+            rawSettings: {},
+          },
+          warnings: finishEventReceived ? [] : ["未收到完成事件，可能流被中断"],
+        };
+      }
+      
+      // 如果既没有完成事件也没有文本，抛出错误
+      const duration = Date.now() - startTime;
+      console.error(`[backend-model] ❌ 生成失败：未收到任何有效响应 (agent: ${agentName}, duration: ${duration}ms, finishEventReceived: ${finishEventReceived})`);
+      throw new Error(`生成失败：未收到任何有效响应 (agent: ${agentName}, duration: ${duration}ms)`);
     },
   };
 }

@@ -51,32 +51,29 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
 
   const uiMessages = convertToUIMessages(messagesFromDb);
 
+  // ✅ 优先从消息 metadata 中获取 agent ID（后端保存时已保存 agentUsed）
+  // 这样刷新页面时能正确显示 agent 名称（如 "司仪"）而不是 ID（如 "chat"）
+  let agentModelId: string | undefined;
+  const firstAssistantMessage = uiMessages.find((msg) => msg.role === "assistant");
+  if (firstAssistantMessage?.metadata?.agentUsed) {
+    agentModelId = firstAssistantMessage.metadata.agentUsed as string;
+  }
+
+  // 回退到 cookie（如果消息中没有 metadata）
   const cookieStore = await cookies();
   const chatModelFromCookie = cookieStore.get("chat-model");
+  const finalChatModel = agentModelId || chatModelFromCookie?.value || DEFAULT_CHAT_MODEL;
 
-  if (!chatModelFromCookie) {
-    return (
-      <>
-        <Chat
-          autoResume={true}
-          id={chat.id}
-          initialChatModel={DEFAULT_CHAT_MODEL}
-          initialLastContext={chat.lastContext ?? undefined}
-          initialMessages={uiMessages}
-          initialVisibilityType={chat.visibility}
-          isReadonly={session?.user?.id !== chat.userId}
-        />
-        <DataStreamHandler />
-      </>
-    );
-  }
+  // ✅ 注意：Server Component 中不能直接修改 cookie
+  // agent ID 已通过 initialChatModel 传递给 Chat 组件，ModelSelector 会在用户交互时更新 cookie
+  // 这里只需要确保 initialChatModel 使用正确的值即可
 
   return (
     <>
       <Chat
         autoResume={true}
         id={chat.id}
-        initialChatModel={chatModelFromCookie.value}
+        initialChatModel={finalChatModel}
         initialLastContext={chat.lastContext ?? undefined}
         initialMessages={uiMessages}
         initialVisibilityType={chat.visibility}

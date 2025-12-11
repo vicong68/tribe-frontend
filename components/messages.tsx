@@ -1,5 +1,6 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
+import { AnimatePresence } from "framer-motion";
 import { ArrowDownIcon } from "lucide-react";
 import { memo, useMemo, useEffect } from "react";
 import { useMessages } from "@/hooks/use-messages";
@@ -206,21 +207,27 @@ function PureMessages({
             );
           })}
 
-          {/* ✅ 关键修复：仅在等待agent回复时显示思考消息，且确保流式回复消息已存在时不显示
+          {/* ✅ 优化：仅在等待agent回复时显示思考消息，且确保流式回复消息已存在时不显示
               思考消息的显示条件：
               1. 状态是 submitted（等待回复）
               2. 不是用户-用户通信
               3. 最后一条消息不是 assistant 消息（避免与流式回复消息重复显示）
+              
+              使用 AnimatePresence 实现平滑的淡入淡出过渡，确保与流式回复消息无缝衔接
+              思考消息使用与流式回复消息完全相同的布局和样式，确保视觉无缝衔接
           */}
-          {status === "submitted" && 
-           !selectedModelId.startsWith("user::") && 
-           uniqueMessages.length > 0 &&
-           uniqueMessages[uniqueMessages.length - 1]?.role !== "assistant" && (
-            <ThinkingMessage 
-              agentName={selectedModelId} 
-              selectedModelId={selectedModelId}
-            />
-          )}
+          <AnimatePresence mode="wait">
+            {status === "submitted" && 
+             !selectedModelId.startsWith("user::") && 
+             uniqueMessages.length > 0 &&
+             uniqueMessages[uniqueMessages.length - 1]?.role !== "assistant" && (
+              <ThinkingMessage 
+                key={`thinking-${selectedModelId}`} // ✅ 优化：key 包含 selectedModelId，确保切换 agent 时重新渲染
+                agentName={selectedModelId} 
+                selectedModelId={selectedModelId}
+              />
+            )}
+          </AnimatePresence>
 
           <div
             className="min-h-[24px] min-w-[24px] shrink-0"

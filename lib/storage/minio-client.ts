@@ -65,17 +65,33 @@ class MinIOClient {
    * @param buffer 文件内容（Buffer）
    * @param contentType 文件类型
    * @param isPublic 是否公开访问
+   * @param originalFilename 原始文件名（用于标签存储）
    * @returns 文件 URL 和路径信息
    */
   async putObject(
     key: string,
     buffer: Buffer | ArrayBuffer,
     contentType: string,
-    isPublic: boolean = true
+    isPublic: boolean = true,
+    originalFilename?: string
   ): Promise<{ url: string; pathname: string; contentType: string; size: number; fileId: string }> {
     const bufferData = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
     const fileSize = bufferData.length;
 
+    // ✅ AWS SDK 会自动为 Metadata key 添加 x-amz-meta- 前缀，不需要手动添加
+    // ✅ HTTP header 值只能包含 ASCII 字符，需要对特殊字符（中文、括号等）进行编码
+    // ✅ 只使用 Metadata 存储原始文件名（Tagging 有格式限制，可能不支持复杂字符）
+    
+    // 准备 Metadata（处理特殊字符）
+    const metadata: Record<string, string> = {};
+    
+    if (originalFilename) {
+      // ✅ Metadata 使用 Base64 编码（HTTP header 安全，完整支持所有字符包括中文、括号等）
+      const base64Encoded = Buffer.from(originalFilename, "utf-8").toString("base64");
+      metadata["original-filename"] = base64Encoded;
+      metadata["original-filename-encoded"] = "base64";
+    }
+    
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
@@ -84,6 +100,9 @@ class MinIOClient {
       ...(isPublic && {
         ACL: "public-read",
       }),
+      // ✅ 只使用 Metadata 存储原始文件名（Base64 编码，完整支持特殊字符）
+      // ✅ 移除 Tagging（TagValue 有格式限制，可能不支持 Base64 或其他编码的特殊字符）
+      ...(Object.keys(metadata).length > 0 && { Metadata: metadata }),
     });
 
     await this.client.send(command);

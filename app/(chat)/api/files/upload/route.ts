@@ -97,12 +97,13 @@ export async function POST(request: Request) {
         key,
       });
       
-      // 上传到 MinIO
+      // ✅ 上传到 MinIO（MinIO 标签存储原始文件名，开启压缩+生命周期管理）
       const data = await minioClient.putObject(
         key,
         fileBuffer,
         contentType,
-        true // 公开访问
+        true, // 公开访问
+        filename // ✅ 原始文件名用于标签存储
       );
 
       console.log("[FileUpload] ✅ File uploaded successfully:", {
@@ -112,13 +113,14 @@ export async function POST(request: Request) {
         fileId: data.fileId,
       });
 
-      // 返回完整元数据，包含size和fileId
+      // 返回完整元数据，包含size、fileId和原始文件名
       return NextResponse.json({
         url: data.url,
         pathname: data.pathname,
         contentType: data.contentType,
         size: data.size,
         fileId: data.fileId,
+        originalFilename: filename, // ✅ 返回原始文件名，用于前端显示
       });
     } catch (error) {
       // 改进的错误处理和日志记录

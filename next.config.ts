@@ -34,7 +34,26 @@ const nextConfig: NextConfig = {
         protocol: minioConfig.protocol,
         hostname: minioConfig.hostname,
       },
+      // ✅ 允许从 localhost 和 127.0.0.1 加载图片（开发环境）
+      {
+        protocol: "http",
+        hostname: "localhost",
+        port: "9000",
+        pathname: "/**",
+      },
+      {
+        protocol: "http",
+        hostname: "127.0.0.1",
+        port: "9000",
+        pathname: "/**",
+      },
     ],
+    // ✅ Next.js 16 允许从私有 IP 加载图片（开发环境必需）
+    dangerouslyAllowSVG: true,
+    contentDispositionType: "attachment",
+    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+    // ✅ 开发环境禁用图片优化，避免私有 IP 限制问题
+    unoptimized: process.env.NODE_ENV === "development",
   },
   
   // 将 AWS SDK 相关包标记为外部包，避免打包到客户端

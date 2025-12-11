@@ -14,12 +14,15 @@ const filePartSchema = z.object({
   // 扩展字段（可选）
   size: z.number().optional(), // 文件大小（字节）
   fileId: z.string().optional(), // 文件ID
+  // ✅ 缩略图URL（可选，允许 null 或 undefined，仅图片文件）
+  thumbnailUrl: z.string().url().nullable().optional(), // 允许 null 和 undefined
   // 支持嵌套file对象（向后兼容）
   file: z.object({
     file_id: z.string().optional(),
     filename: z.string().optional(),
     size: z.number().optional(),
     download_url: z.string().url().optional(),
+    thumbnail_url: z.string().url().nullable().optional(), // ✅ 缩略图URL（嵌套格式，允许 null）
   }).optional(),
 });
 
