@@ -62,7 +62,8 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   // 回退到 cookie（如果消息中没有 metadata）
   const cookieStore = await cookies();
   const chatModelFromCookie = cookieStore.get("chat-model");
-  const finalChatModel = agentModelId || chatModelFromCookie?.value || DEFAULT_CHAT_MODEL;
+  const finalChatModel =
+    agentModelId || chatModelFromCookie?.value || DEFAULT_CHAT_MODEL;
 
   // ✅ 注意：Server Component 中不能直接修改 cookie
   // agent ID 已通过 initialChatModel 传递给 Chat 组件，ModelSelector 会在用户交互时更新 cookie

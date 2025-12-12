@@ -45,6 +45,7 @@ const PurePreviewMessage = ({
   requiresScrollPadding: _requiresScrollPadding,
   selectedModelId,
   sendMessage,
+  modelLookup,
 }: {
   chatId: string;
   message: ChatMessage;
@@ -56,6 +57,7 @@ const PurePreviewMessage = ({
   requiresScrollPadding: boolean;
   selectedModelId?: string;
   sendMessage?: (message: ChatMessage) => void;
+  modelLookup?: Record<string, { name?: string }>;
 }) => {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const { data: session } = useSession();
@@ -78,6 +80,16 @@ const PurePreviewMessage = ({
   // ✅ 统一使用消息渲染工具函数，简化代码逻辑
   // Hooks必须在顶层调用，但可以通过参数控制是否实际加载
   const { models: chatModels } = useChatModels(false); // 总是加载agents列表，但不包含用户列表
+  const effectiveModelLookup = useMemo(() => {
+    if (modelLookup && Object.keys(modelLookup).length > 0) {
+      return modelLookup;
+    }
+    const lookup: Record<string, { name?: string }> = {};
+    for (const model of chatModels) {
+      lookup[model.id] = { name: model.name };
+    }
+    return lookup;
+  }, [modelLookup, chatModels]);
   
   // ✅ 优化：使用 useMemo 缓存渲染信息，避免重复计算
   const renderInfo = useMemo(() => {
@@ -86,9 +98,10 @@ const PurePreviewMessage = ({
       metadata as Record<string, any> | null | undefined,
       selectedModelId,
       session,
-      chatModels
+      chatModels,
+      effectiveModelLookup
     );
-  }, [message, metadata, selectedModelId, session, chatModels]);
+  }, [message, metadata, selectedModelId, session, chatModels, effectiveModelLookup]);
   
   // 从渲染信息中提取需要的变量（保持向后兼容）
   const { senderName, receiverName, avatarSeed, senderId, isAgent, isRemoteUser, isLocalUser } = renderInfo;
@@ -575,6 +588,11 @@ export const PreviewMessage = memo(
       return false;
     }
     
+    // 3.5 模型映射变化（可能带来更友好的名称），需要重新渲染
+    if (prevProps.modelLookup !== nextProps.modelLookup) {
+      return false;
+    }
+    
     // 4. isLoading 状态变化，需要重新渲染（影响加载状态显示）
     if (prevProps.isLoading !== nextProps.isLoading) {
       return false;
@@ -609,15 +627,27 @@ export const PreviewMessage = memo(
 export const ThinkingMessage = ({
   agentName,
   selectedModelId,
+  modelLookup,
 }: {
   agentName?: string;
   selectedModelId?: string;
+  modelLookup?: Record<string, { name?: string }>;
 }) => {
   // ✅ 统一使用思考消息渲染工具函数，确保与流式消息的渲染信息保持一致
   const { models: chatModels } = useChatModels(false); // 总是加载 agents 列表，但不包含用户列表
+  const effectiveModelLookup = useMemo(() => {
+    if (modelLookup && Object.keys(modelLookup).length > 0) {
+      return modelLookup;
+    }
+    const lookup: Record<string, { name?: string }> = {};
+    for (const model of chatModels) {
+      lookup[model.id] = { name: model.name };
+    }
+    return lookup;
+  }, [modelLookup, chatModels]);
   
   // 使用统一的思考消息渲染工具函数获取渲染信息
-  const renderInfo = getThinkingMessageRenderInfo(selectedModelId, chatModels);
+  const renderInfo = getThinkingMessageRenderInfo(selectedModelId, chatModels, effectiveModelLookup);
   
   // 如果传入了 agentName 且不是 agent_id，优先使用（向后兼容）
   const displayAgentName = agentName && agentName !== selectedModelId 

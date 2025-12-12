@@ -273,7 +273,7 @@ export function KnowledgeFolderList({
 
   return (
     <div
-      className="p-2 space-y-1.5"
+      className="p-2"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onBackgroundClick?.();

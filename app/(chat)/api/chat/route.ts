@@ -217,14 +217,7 @@ export async function POST(request: Request) {
             messagePreview: messageText.substring(0, 50) + (messageText.length > 50 ? "..." : ""),
           });
           
-          // 2. 异步更新为 AI 生成的标题（不阻塞主流程）
-          const titleConversationId = `title_${backendMemberId}_${Date.now()}`;
-          updateChatTitleAsync({
-            chatId: id,
-            message,
-            userId: backendMemberId,
-            conversationId: titleConversationId,
-          });
+          // 2. AI 标题生成逻辑保留但不再调用（备用，不阻塞当前流程）
         } catch (error) {
           console.error("[Chat API] ❌ 轻量级标题生成异常:", {
             error: error instanceof Error ? error.message : String(error),

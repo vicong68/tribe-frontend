@@ -62,6 +62,7 @@ export function KnowledgeFolderItem({
   onToggleExpand,
   onToggleCollect,
 }: KnowledgeFolderItemProps) {
+  const isDraggable = level === 0;
   const [showActions, setShowActions] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -72,7 +73,7 @@ export function KnowledgeFolderItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: folder.folder_id });
+  } = useSortable({ id: folder.folder_id, disabled: !isDraggable });
 
   const sortableStyle = {
     transform: CSS.Transform.toString(transform),
@@ -99,10 +100,13 @@ export function KnowledgeFolderItem({
       ref={setNodeRef}
       style={{
         ...sortableStyle,
-        paddingLeft: `${8 + level * 12}px`,
+        // 增加层级缩进：每层由 12px 提升为 24px，提升层级可辨识度
+        paddingLeft: `${8 + level * 24}px`,
       }}
       className={cn(
-        "group relative flex items-center gap-2 rounded-md border border-sidebar-border bg-sidebar p-2 transition-all hover:bg-accent cursor-pointer overflow-visible z-10",
+        "group relative flex items-center gap-2 bg-sidebar p-2 transition-all hover:bg-accent cursor-pointer overflow-visible z-10",
+        // 合并上下边缘：去掉圆角及外边框，仅首尾保持轻微圆角以融入区域
+        "rounded-none -mt-px first:mt-0 first:rounded-t-md last:rounded-b-md",
         isSelected && "ring-1 ring-primary bg-primary/10",
         isDragging && "cursor-grabbing"
       )}
@@ -112,17 +116,21 @@ export function KnowledgeFolderItem({
     >
       {/* 展开/折叠 + 图标 */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-5 w-5 p-0 text-muted-foreground cursor-grab active:cursor-grabbing"
-          {...attributes}
-          {...listeners}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <GripVertical className="size-3" />
-        </Button>
+        {isDraggable ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5 p-0 text-muted-foreground cursor-grab active:cursor-grabbing"
+            {...attributes}
+            {...listeners}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <GripVertical className="size-3" />
+          </Button>
+        ) : (
+          <div className="h-5 w-5" />
+        )}
         <Button
           variant="ghost"
           size="icon"

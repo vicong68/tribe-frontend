@@ -32,6 +32,7 @@ export async function generateTitleFromUserMessage({
   try {
     const messageText = getTextFromMessage(message);
     const trimmedText = messageText?.trim() || "";
+    const createdAt = message.metadata?.createdAt;
     
     if (!trimmedText) {
       console.log("[generateTitle] 消息文本为空，返回默认标题");
@@ -40,9 +41,10 @@ export async function generateTitleFromUserMessage({
 
     // 轻量级模式：使用快速规则生成标题（无需调用后端）
     if (lightweight) {
-      const title = generateLightweightTitle(trimmedText);
+      const title = generateLightweightTitle(trimmedText, createdAt);
       console.log("[generateTitle] ✅ 轻量级标题生成成功:", {
         title,
+        createdAt,
         messagePreview: trimmedText.substring(0, 50) + (trimmedText.length > 50 ? "..." : ""),
       });
       return title;
@@ -132,7 +134,10 @@ export async function updateChatTitleAsync({
       
       // 只有当 AI 生成的标题与轻量级标题不同时才更新
       const messageText = getTextFromMessage(message);
-      const lightweightTitle = generateLightweightTitle(messageText?.trim() || "");
+      const lightweightTitle = generateLightweightTitle(
+        messageText?.trim() || "",
+        message.metadata?.createdAt,
+      );
       
       if (aiTitle && aiTitle !== lightweightTitle && aiTitle !== "新对话") {
         await updateChatById({ id: chatId, title: aiTitle });

@@ -359,78 +359,19 @@ export function convertToDBMessages(
 
 /**
  * 轻量级标题生成（无需调用后端，快速生成）
- * 规则：
- * 1. 提取消息前 50 个字符
- * 2. 去除标点符号和特殊字符
- * 3. 如果包含问号，提取问号前的内容
- * 4. 如果包含常见问题词（什么、如何、为什么、怎么等），提取关键词
- * 5. 限制长度在 20-30 字符
+ * 使用对话第一条消息的时间作为标题（格式：YYYY-MM-DD/HH:mm）
  */
-export function generateLightweightTitle(messageText: string): string {
-  if (!messageText || !messageText.trim()) {
-    return "新对话";
-  }
+export function generateLightweightTitle(
+  _messageText: string,
+  createdAt?: string | Date,
+): string {
+  const dateFromMetadata = createdAt ? new Date(createdAt) : new Date();
+  const validDate = Number.isNaN(dateFromMetadata.getTime())
+    ? new Date()
+    : dateFromMetadata;
 
-  let text = messageText.trim();
-  
-  // 如果包含问号，提取问号前的内容
-  const questionIndex = text.indexOf("？") !== -1 ? text.indexOf("？") : text.indexOf("?");
-  if (questionIndex !== -1 && questionIndex > 0) {
-    text = text.substring(0, questionIndex).trim();
-  }
-  
-  // 提取前 50 个字符
-  if (text.length > 50) {
-    text = text.substring(0, 50);
-  }
-  
-  // 去除常见的标点符号和特殊字符（保留中文、英文、数字、空格）
-  text = text.replace(/[，。！？：；、""''（）【】《》〈〉「」『』【】]/g, " ");
-  text = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, " ");
-  text = text.replace(/\s+/g, " ").trim();
-  
-  // 如果包含常见问题词，尝试提取关键词
-  const questionWords = ["什么", "如何", "为什么", "怎么", "怎样", "能否", "可以", "能否", "请", "帮我"];
-  let foundQuestionWord = false;
-  for (const word of questionWords) {
-    if (text.includes(word)) {
-      foundQuestionWord = true;
-      // 提取问题词后的内容
-      const index = text.indexOf(word);
-      if (index !== -1 && index + word.length < text.length) {
-        text = text.substring(index + word.length).trim();
-      }
-      break;
-    }
-  }
-  
-  // 如果提取后为空，使用原始文本的前 30 个字符
-  if (!text) {
-    text = messageText.trim().substring(0, 30);
-    text = text.replace(/[，。！？：；、""''（）【】《》〈〉「」『』【】]/g, " ");
-    text = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s]/g, " ").trim();
-  }
-  
-  // 限制长度在 20-30 字符之间
-  const maxLength = 30;
-  const minLength = 20;
-  if (text.length > maxLength) {
-    // 尝试在空格处截断
-    const truncated = text.substring(0, maxLength);
-    const lastSpace = truncated.lastIndexOf(" ");
-    if (lastSpace > minLength) {
-      text = truncated.substring(0, lastSpace);
-    } else {
-      text = truncated;
-    }
-  }
-  
-  // 如果太短，补充省略号
-  if (text.length < minLength && messageText.length > text.length) {
-    text = text + "...";
-  }
-  
-  return text || "新对话";
+  // 使用创建时间作为标题，格式：12-11 16:18
+  return format(validDate, "MM-dd HH:mm");
 }
 
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {

@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { memo } from "react";
+import { memo, useMemo } from "react";
+import { format } from "date-fns";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Chat } from "@/lib/db/schema";
 import {
@@ -42,11 +43,21 @@ const PureChatItem = ({
     initialVisibilityType: chat.visibility,
   });
 
+  const compactTitle = useMemo(() => {
+    const date = chat.createdAt ? new Date(chat.createdAt) : null;
+    if (date && !Number.isNaN(date.getTime())) {
+      return format(date, "MM-dd HH:mm");
+    }
+    return chat.title;
+  }, [chat.createdAt, chat.title]);
+
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isActive}>
         <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile?.(false)}>
-          <span>{chat.title}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{compactTitle}</span>
+          </div>
         </Link>
       </SidebarMenuButton>
 
@@ -54,7 +65,7 @@ const PureChatItem = ({
         <DropdownMenuTrigger asChild>
           <SidebarMenuAction
             className="mr-0.5 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-            showOnHover={!isActive}
+            showOnHover={false}
           >
             <MoreHorizontalIcon />
             <span className="sr-only">More</span>

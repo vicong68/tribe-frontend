@@ -25,6 +25,7 @@ type MessagesProps = {
   isArtifactVisible: boolean;
   selectedModelId: string;
   sendMessage?: (message: ChatMessage) => void;
+  modelLookup?: Record<string, { name?: string }>;
 };
 
 function PureMessages({
@@ -37,6 +38,7 @@ function PureMessages({
   isReadonly,
   selectedModelId,
   sendMessage,
+  modelLookup,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -190,6 +192,7 @@ function PureMessages({
                 isLoading={isStreamingAssistant && !hasValidContent}
                 isReadonly={isReadonly}
                 key={message.id}
+                modelLookup={modelLookup}
                 message={message}
                 regenerate={regenerate}
                 requiresScrollPadding={
@@ -224,6 +227,7 @@ function PureMessages({
               <ThinkingMessage 
                 key="thinking"
                 agentName={selectedModelId} 
+                modelLookup={modelLookup}
                 selectedModelId={selectedModelId}
               />
             )}

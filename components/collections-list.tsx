@@ -384,13 +384,15 @@ export function CollectionsList() {
 
   return (
     <ScrollArea className="flex-1 h-full w-full overflow-visible">
-      <div className="space-y-0.5 px-1 pb-1">
+      <div className="space-y-0 px-1 pb-1">
         {sortedCollections.map((item) => (
           <div
             key={item.id}
             className={cn(
-              "p-1 rounded-sm border border-sidebar-border bg-background hover:bg-accent transition-colors cursor-pointer",
-              "text-[11px] relative group/item w-full"
+              "p-1 bg-background hover:bg-accent transition-colors cursor-pointer",
+              "text-[11px] relative group/item w-full",
+              // 合并相邻边缘线，去除单独圆角与间距
+              "border border-sidebar-border rounded-none -mt-px first:mt-0 first:rounded-t-sm last:rounded-b-sm"
             )}
             onMouseEnter={() => setHoveredItemId(item.id)}
             onMouseLeave={() => setHoveredItemId(null)}
@@ -399,10 +401,10 @@ export function CollectionsList() {
               console.log("点击收藏项:", item);
             }}
           >
-            <div className="flex items-start justify-between gap-1 mb-0.5 min-w-0">
+            <div className="flex flex-wrap items-start gap-1 mb-0.5 min-w-0">
               <span
                 className={cn(
-                  "text-[10px] font-medium truncate flex-1 min-w-0",
+                  "text-[10px] font-medium flex-1 min-w-0 whitespace-normal break-words",
                   item.message_role === "user" ? "text-blue-600" : "text-green-600"
                 )}
               >
@@ -414,21 +416,19 @@ export function CollectionsList() {
               {extractMainContent(item.message_content)}
             </div>
             <div className="text-[9px] text-muted-foreground mt-0.5 relative flex items-center gap-1">
-              {hoveredItemId === item.id && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-4 w-4 p-0 shrink-0 text-muted-foreground hover:text-foreground z-50 flex-shrink-0"
-                  onClick={(e) => handleDeleteCollection(item.id, item.message_id, e)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  title="取消收藏"
-                  type="button"
-                >
-                  <StarFilledIcon size={12} />
-                </Button>
-              )}
               <span className="flex-1">{formatDate(new Date(item.created_at), "MM-dd HH:mm", { locale: zhCN })}</span>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="absolute left-1 bottom-1 h-4 w-4 p-0 shrink-0 text-muted-foreground hover:text-foreground z-50 opacity-0 group-hover/item:opacity-100 transition-opacity"
+              onClick={(e) => handleDeleteCollection(item.id, item.message_id, e)}
+              onMouseDown={(e) => e.stopPropagation()}
+              title="取消收藏"
+              type="button"
+            >
+              <StarFilledIcon size={12} />
+            </Button>
           </div>
         ))}
       </div>

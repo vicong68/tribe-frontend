@@ -4,7 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useRef, useState, startTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -15,6 +15,7 @@ import { useConversationManager } from "@/hooks/use-conversation-manager";
 import { useMessagePersistence } from "@/hooks/use-message-persistence";
 import { useOfflineMessages } from "@/hooks/use-offline-messages";
 import { useStreamChatWithRetry } from "@/hooks/use-stream-chat-with-retry";
+import { useChatModels } from "@/lib/ai/models-client";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -231,7 +232,17 @@ export function Chat({
   const userId = isLoggedIn && session?.user
     ? getBackendMemberId(session.user)
     : null;
-  
+
+  // 统一供渲染使用的模型映射（含静态/动态 agent）
+  const { models: chatModels } = useChatModels(false);
+  const modelLookup = useMemo(() => {
+    const lookup: Record<string, { name?: string }> = {};
+    for (const model of chatModels) {
+      lookup[model.id] = { name: model.name };
+    }
+    return lookup;
+  }, [chatModels]);
+
   // 拉取离线消息（仅在用户登录成功且 SSE 连接建立后）
   // 拉取完成后触发用户列表和状态更新
   useOfflineMessages({
@@ -252,19 +263,29 @@ export function Chat({
           return prevMessages;
         }
         
-        // 检查是否已存在相同内容的消息（避免重复）
+        // 检查是否已存在相同内容的消息（避免重复），同时比较文本与文件
         const uniqueNewMessages = newMessages.filter((newMsg) => {
           const newTextPart = newMsg.parts?.find((p: any) => p.type === "text") as any;
+          const newFilePart = newMsg.parts?.find((p: any) => p.type === "file") as any;
           const newText = newTextPart?.text || "";
+          const newFileUrl = newFilePart?.url || null;
+
           return !prevMessages.some((existing) => {
             const existingTextPart = existing.parts?.find((p: any) => p.type === "text") as any;
+            const existingFilePart = existing.parts?.find((p: any) => p.type === "file") as any;
             const existingText = existingTextPart?.text || "";
+            const existingFileUrl = existingFilePart?.url || null;
+
+            const textMatch = (!existingText && !newText) || existingText === newText;
+            const fileMatch = (!existingFileUrl && !newFileUrl) || existingFileUrl === newFileUrl;
+
             return (
               existing.metadata?.senderId === newMsg.metadata?.senderId &&
               existing.metadata?.receiverId === newMsg.metadata?.receiverId &&
               existing.role === "assistant" &&
               existing.metadata?.communicationType === "user_user" &&
-              existingText === newText
+              textMatch &&
+              fileMatch
             );
           });
         });
@@ -273,10 +294,15 @@ export function Chat({
           return prevMessages;
         }
         
-        // 保存到数据库
-        saveAssistantMessages(uniqueNewMessages).catch((error) => {
-          console.error("[Chat] Failed to save offline messages to database:", error);
-        });
+        // 仅对非用户-用户消息执行前端保存；用户-用户消息已由后端持久化
+        const messagesToPersist = uniqueNewMessages.filter(
+          (msg) => msg.metadata?.communicationType !== "user_user"
+        );
+        if (messagesToPersist.length > 0) {
+          saveAssistantMessages(messagesToPersist).catch((error) => {
+            console.error("[Chat] Failed to save offline messages to database:", error);
+          });
+        }
         
         return [...prevMessages, ...uniqueNewMessages];
       });
@@ -491,10 +517,12 @@ export function Chat({
         return [...prevMessages, chatMessage];
       });
 
-      // 保存到数据库
-      saveAssistantMessages([chatMessage]).catch((error) => {
-        console.error("[Chat] Failed to save SSE message to database:", error);
-      });
+      // 保存到数据库（仅非用户-用户消息需要前端兜底保存）
+      if (chatMessage.metadata?.communicationType !== "user_user") {
+        saveAssistantMessages([chatMessage]).catch((error) => {
+          console.error("[Chat] Failed to save SSE message to database:", error);
+        });
+      }
     });
 
     return unsubscribe;
@@ -617,9 +645,10 @@ export function Chat({
           chatId={id}
           isArtifactVisible={isArtifactVisible}
           isReadonly={isReadonly}
+          modelLookup={modelLookup}
           messages={messages}
           regenerate={regenerate}
-          selectedModelId={initialChatModel}
+          selectedModelId={currentModelId}
           sendMessage={sendMessage}
           setMessages={setMessages}
           status={status}
@@ -661,6 +690,7 @@ export function Chat({
         chatId={id}
         input={input}
         isReadonly={isReadonly}
+        modelLookup={modelLookup}
         messages={messages}
         regenerate={regenerate}
         selectedModelId={currentModelId}

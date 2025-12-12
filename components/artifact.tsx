@@ -68,6 +68,7 @@ function PureArtifact({
   isReadonly,
   selectedVisibilityType,
   selectedModelId,
+  modelLookup,
 }: {
   chatId: string;
   input: string;
@@ -84,6 +85,7 @@ function PureArtifact({
   isReadonly: boolean;
   selectedVisibilityType: VisibilityType;
   selectedModelId: string;
+  modelLookup?: Record<string, { name?: string }>;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
 
@@ -323,6 +325,7 @@ function PureArtifact({
                   artifactStatus={artifact.status}
                   chatId={chatId}
                   isReadonly={isReadonly}
+                  modelLookup={modelLookup}
                   messages={messages}
                   regenerate={regenerate}
                   setMessages={setMessages}

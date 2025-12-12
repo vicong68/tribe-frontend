@@ -25,6 +25,7 @@ import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { useChatModels } from "@/lib/ai/models-client";
 import { preloadAvatars } from "@/lib/avatar-utils";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -140,9 +141,17 @@ function PureMultimodalInput({
 
   const { data: session } = useSession();
   const { models: chatModels } = useChatModels(session?.user?.type === "regular");
+  const selectedRecipient = chatModels.find((model) => model.id === selectedModelId);
+  const placeholderRecipientName = selectedRecipient?.name || "消息收方";
+  const inputPlaceholder = `@${placeholderRecipientName} 发送消息...`;
   
   const submitForm = useCallback(() => {
     window.history.pushState({}, "", `/chat/${chatId}`);
+
+    if (!selectedModelId) {
+      toast.error("请选择消息收方");
+      return;
+    }
 
     // 预先构建 metadata，确保在发送消息时就有完整的 metadata
     // 这样可以避免流式响应开始时用户消息不可见的问题
@@ -298,10 +307,10 @@ function PureMultimodalInput({
   const generateAndUploadThumbnail = useCallback(async (
     file: File,
     fileId: string
-  ): Promise<string | null> => {
+  ): Promise<string | undefined> => {
     if (!file.type.startsWith("image/")) {
       console.log("[MultimodalInput] 跳过非图片文件:", file.type);
-      return null;
+      return undefined;
     }
 
     // ✅ 检查缓存（使用文件 hash 或 fileId）
@@ -332,7 +341,7 @@ function PureMultimodalInput({
       const ctx = canvas.getContext("2d");
       if (!ctx) {
         bitmap.close(); // ✅ 手动释放内存
-        return null;
+        return undefined;
       }
 
       ctx.drawImage(bitmap, 0, 0, scaledWidth, scaledHeight);
@@ -373,14 +382,14 @@ function PureMultimodalInput({
       } else {
         const errorText = await uploadResponse.text();
         console.error("[MultimodalInput] ❌ 缩略图上传失败:", uploadResponse.status, errorText);
-        return null;
+        return undefined;
       }
     } catch (error) {
       console.error("[MultimodalInput] ❌ 生成/上传缩略图失败:", error);
       if (error instanceof Error) {
         console.error("[MultimodalInput] 错误详情:", error.message, error.stack);
       }
-      return null;
+      return undefined;
     }
   }, []);
 
@@ -429,14 +438,14 @@ function PureMultimodalInput({
         const finalFileId = fileId || url;
 
         // ✅ 合并生成+上传逻辑：如果是图片文件，生成并上传缩略图
-        let thumbnailUrl: string | null = null;
+        let thumbnailUrl: string | undefined;
         if (isImage && fileForThumbnail) {
           console.log("[MultimodalInput] 开始生成缩略图:", file.name);
           thumbnailUrl = await generateAndUploadThumbnail(fileForThumbnail, finalFileId);
           if (thumbnailUrl) {
             console.log("[MultimodalInput] ✅ 缩略图生成成功:", thumbnailUrl);
           } else {
-            console.warn("[MultimodalInput] ⚠️ 缩略图生成返回 null");
+            console.warn("[MultimodalInput] ⚠️ 缩略图生成返回空值");
           }
         }
 
@@ -486,7 +495,7 @@ function PureMultimodalInput({
 
       try {
         // 并行上传所有文件，但分别处理成功和失败
-        const uploadPromises = files.map(async (file) => {
+        const uploadPromises: Array<Promise<Attachment | undefined>> = files.map(async (file) => {
           try {
             return await uploadFile(file);
           } catch (error) {
@@ -498,8 +507,8 @@ function PureMultimodalInput({
         });
         
         const uploadedAttachments = await Promise.all(uploadPromises);
-        const successfullyUploadedAttachments = uploadedAttachments.filter(
-          (attachment) => attachment !== undefined
+        const successfullyUploadedAttachments: Attachment[] = uploadedAttachments.filter(
+          (attachment): attachment is Attachment => Boolean(attachment)
         );
 
         if (successfullyUploadedAttachments.length > 0) {
@@ -684,7 +693,7 @@ function PureMultimodalInput({
             maxHeight={200}
             minHeight={44}
             onChange={handleInput}
-            placeholder="发送消息..."
+            placeholder={inputPlaceholder}
             ref={textareaRef}
             rows={1}
             value={input}
@@ -711,6 +720,11 @@ function PureMultimodalInput({
               className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
               data-testid="send-button"
               disabled={(() => {
+                // 未选择消息收方时禁止发送
+                if (!selectedModelId) {
+                  return true;
+                }
+                
                 // 如果正在上传文件，禁用按钮
                 if (uploadQueue.length > 0) {
                   return true;
@@ -959,7 +973,14 @@ function PureModelSelectorCompact({
   // 统一使用好友列表的逻辑：显示所有agents（包括动态智能体），不进行权限过滤
   // 权限过滤应该在发送消息时进行，而不是在显示列表时
   const availableAgents = chatModels.filter((chatModel) => {
-    return chatModel.type === "agent";
+    if (chatModel.type !== "agent") {
+      return false;
+    }
+    // 访客仅允许与默认司仪对话
+    if (!isLoggedIn) {
+      return chatModel.id === DEFAULT_CHAT_MODEL;
+    }
+    return true;
   });
 
   const availableUsers = chatModels.filter((chatModel) => {
@@ -994,7 +1015,8 @@ function PureModelSelectorCompact({
 
   const selectedModel = modelsWithAvatars.find(
     (model) => model.id === optimisticModelId
-  ) || modelsWithAvatars[0];
+  );
+  const selectedLabel = selectedModel?.name ?? "消息收方";
 
   // 判断选中的模型是否是当前用户（本地用户不显示状态）
   const isCurrentUser = useMemo(() => {
@@ -1008,17 +1030,23 @@ function PureModelSelectorCompact({
 
   return (
     <PromptInputModelSelect
+      aria-label="消息收方列表"
       onValueChange={(modelName) => {
         const model = allModels.find((m) => m.name === modelName);
         if (model) {
           handleModelChange(model.id);
         }
       }}
-      value={selectedModel?.name}
+      value={selectedModel?.name ?? undefined}
     >
       <Trigger asChild>
-        <Button className="h-8 px-2" variant="ghost">
-          {selectedModel && (
+        <Button
+          aria-label="消息收方列表"
+          className="h-8 px-2"
+          title="消息收方列表"
+          variant="ghost"
+        >
+          {selectedModel ? (
             <div className="mr-1.5 shrink-0">
               <UnifiedAvatar
                 name={selectedModel.name}
@@ -1029,9 +1057,9 @@ function PureModelSelectorCompact({
                 isOnline={selectedModel.isOnline}
               />
             </div>
-          )}
+          ) : null}
           <span className="hidden font-medium text-xs sm:block">
-            {selectedModel?.name}
+            {selectedLabel}
           </span>
           <ChevronDownIcon size={16} />
         </Button>

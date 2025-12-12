@@ -17,6 +17,7 @@ type ArtifactMessagesProps = {
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   isReadonly: boolean;
   artifactStatus: UIArtifact["status"];
+  modelLookup?: Record<string, { name?: string }>;
 };
 
 function PureArtifactMessages({
@@ -27,6 +28,7 @@ function PureArtifactMessages({
   setMessages,
   regenerate,
   isReadonly,
+  modelLookup,
 }: ArtifactMessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -59,6 +61,7 @@ function PureArtifactMessages({
           isLoading={status === "streaming" && index === uniqueMessages.length - 1}
           isReadonly={isReadonly}
           key={message.id}
+          modelLookup={modelLookup}
           message={message}
           regenerate={regenerate}
           requiresScrollPadding={
@@ -74,7 +77,12 @@ function PureArtifactMessages({
       ))}
 
       <AnimatePresence mode="wait">
-        {status === "submitted" && <ThinkingMessage key="thinking" />}
+        {status === "submitted" && (
+          <ThinkingMessage
+            key="thinking"
+            modelLookup={modelLookup}
+          />
+        )}
       </AnimatePresence>
 
       <motion.div
@@ -91,6 +99,9 @@ function areEqual(
   prevProps: ArtifactMessagesProps,
   nextProps: ArtifactMessagesProps
 ) {
+  if (prevProps.modelLookup !== nextProps.modelLookup) {
+    return false;
+  }
   if (
     prevProps.artifactStatus === "streaming" &&
     nextProps.artifactStatus === "streaming"
