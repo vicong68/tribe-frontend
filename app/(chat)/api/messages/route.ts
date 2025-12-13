@@ -2,13 +2,68 @@ import { auth } from "@/app/(auth)/auth";
 import { getChatById, getMessagesByChatId, saveMessages } from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
-import { convertToDBMessages } from "@/lib/utils";
+import { convertToDBMessages, convertToUIMessages } from "@/lib/utils";
 
 /**
- * 消息持久化 API 端点
- * 符合 AI SDK 规范的消息保存机制
+ * 消息 API 端点
+ * 
+ * GET: 获取指定对话的所有消息（用于消息固化）
+ * POST: 保存 assistant 消息到数据库（符合 AI SDK 规范）
  * 
  * 参考: https://ai-sdk.dev/docs/ai-sdk-ui/chatbot/message-persistence
+ */
+
+/**
+ * GET /api/messages?chatId=xxx
+ * 获取指定对话的所有消息（用于消息固化）
+ */
+export async function GET(request: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return new ChatSDKError("unauthorized:chat").toResponse();
+    }
+
+    const { searchParams } = new URL(request.url);
+    const chatId = searchParams.get("chatId");
+
+    if (!chatId) {
+      return new ChatSDKError(
+        "bad_request:api",
+        "chatId parameter is required"
+      ).toResponse();
+    }
+
+    // 验证聊天是否存在且用户有权限
+    const chat = await getChatById({ id: chatId });
+    if (!chat) {
+      return new ChatSDKError("not_found:chat").toResponse();
+    }
+
+    if (chat.userId !== session.user.id) {
+      return new ChatSDKError("forbidden:chat").toResponse();
+    }
+
+    // 获取消息并转换为 UI 格式
+    const messagesFromDb = await getMessagesByChatId({ id: chatId });
+    const uiMessages = convertToUIMessages(messagesFromDb);
+
+    return Response.json(uiMessages);
+  } catch (error) {
+    console.error("[messages/route] Failed to get messages:", error);
+    if (error instanceof ChatSDKError) {
+      return error.toResponse();
+    }
+    return new ChatSDKError(
+      "offline:chat",
+      error instanceof Error ? error.message : "Failed to get messages"
+    ).toResponse();
+  }
+}
+
+/**
+ * POST /api/messages
+ * 保存 assistant 消息到数据库（符合 AI SDK 规范）
  * 
  * 功能：
  * 1. 保存 assistant 消息到数据库

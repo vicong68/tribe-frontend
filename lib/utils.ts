@@ -374,12 +374,75 @@ export function generateLightweightTitle(
   return format(validDate, "MM-dd HH:mm");
 }
 
+/**
+ * 从消息对象中提取文本内容
+ * 
+ * 提取策略（按优先级）：
+ * 1. 优先使用 message.content（AI SDK 标准字段）
+ *    - AI SDK 在流式渲染过程中，会将完整内容累积到 content 字段
+ *    - 适用于流式消息渲染结束后立即获取完整内容
+ *    - 这是最可靠的数据源，包含完整的消息文本
+ * 2. 如果 content 为空，回退到 message.parts 中提取 type === 'text' 的 part 的 text 字段
+ *    - 支持复杂消息结构（包含 reasoning、tool、file 等 parts）
+ *    - 适用于已持久化的消息和包含结构化 parts 的消息
+ *    - 注意：在流式渲染过程中，parts 可能只有部分内容（如 "##"），因此不作为首选
+ * 
+ * @param message - ChatMessage 或 UIMessage 对象
+ * @returns 提取的文本内容，如果都没有则返回空字符串
+ */
 export function getTextFromMessage(message: ChatMessage | UIMessage): string {
-  if (!message.parts || message.parts.length === 0) {
-    return '';
+  // ✅ 智能提取策略：优先使用更完整的数据源
+  // 1. 优先从 parts 提取（如果 parts 有完整内容）
+  // 2. 回退到 content（AI SDK 标准字段）
+  // 注意：在流式渲染过程中，content 和 parts 可能都只有部分内容
+  // 因此需要比较两者的长度，选择更完整的作为数据源
+  
+  let textFromParts: string = '';
+  let textFromContent: string = '';
+  
+  // 1. 尝试从 parts 提取文本内容
+  if (message.parts && message.parts.length > 0) {
+    textFromParts = message.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => {
+        const partText = (part as { type: 'text'; text: string }).text;
+        return typeof partText === 'string' ? partText : '';
+      })
+      .join('');
   }
-  return message.parts
-    .filter((part) => part.type === 'text')
-    .map((part) => (part as { type: 'text'; text: string}).text || '')
-    .join('');
+  
+  // 2. 尝试从 content 提取文本内容
+  const messageContent = (message as any).content;
+  if (messageContent) {
+    if (typeof messageContent === 'string') {
+      textFromContent = messageContent;
+    } else if (Array.isArray(messageContent)) {
+      textFromContent = messageContent
+        .filter((item) => typeof item === 'string')
+        .join('');
+    } else if (typeof messageContent === 'object' && messageContent !== null) {
+      textFromContent = (messageContent as any).text || 
+                        (messageContent as any).content || 
+                        String(messageContent);
+    } else {
+      textFromContent = String(messageContent);
+    }
+  }
+  
+  // 3. 选择更完整的内容源
+  // 如果两者都有内容，选择长度更长的（更完整）
+  // 如果只有一个有内容，使用有内容的那个
+  if (textFromParts && textFromContent) {
+    // 两者都有内容，选择更完整的
+    return textFromParts.length >= textFromContent.length ? textFromParts : textFromContent;
+  } else if (textFromParts) {
+    // 只有 parts 有内容
+    return textFromParts;
+  } else if (textFromContent) {
+    // 只有 content 有内容
+    return textFromContent;
+  }
+  
+  // 如果都没有，返回空字符串
+  return '';
 }

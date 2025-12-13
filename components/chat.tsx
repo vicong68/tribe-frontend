@@ -18,7 +18,7 @@ import { useStreamChatWithRetry } from "@/hooks/use-stream-chat-with-retry";
 import { useChatModels } from "@/lib/ai/models-client";
 import type { Vote } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
@@ -130,14 +130,85 @@ export function Chat({
         setUsage(dataPart.data);
       }
       
-      // ✅ 处理后端保存成功通知
+      // ✅ 处理后端保存成功通知：直接使用 data-persisted 事件中的完整消息信息更新消息对象
+      // 优化方案：后端已在 data-persisted 事件中包含完整的 parts、content 和 metadata
+      // 避免额外的 HTTP 请求，提升性能和用户体验
+      // 参考 Vercel AI Chatbot 最佳实践：在流式响应中直接传递完整信息
       if (dataPart.type === "data-persisted" && dataPart.data?.persisted === true) {
         const messageId = dataPart.data?.messageId || messagesRef.current[messagesRef.current.length - 1]?.id;
-        if (messageId) {
+        const persistedData = dataPart.data;
+        
+        if (messageId && persistedData) {
           backendPersistedMessageIdsRef.current.add(messageId);
           if (process.env.NODE_ENV === "development") {
-            console.log(`[Chat] ✅ 后端已保存: ${messageId.slice(0, 8)}...`);
+            console.log(`[Chat] ✅ 后端已保存: ${messageId.slice(0, 8)}...`, {
+              hasParts: !!persistedData.parts,
+              hasContent: !!persistedData.content,
+              hasMetadata: !!persistedData.metadata,
+            });
           }
+          
+          // ✅ 直接使用 data-persisted 事件中的数据更新消息对象
+          // 确保工具栏功能（复制/收藏/分享/点赞/点踩）和时间戳显示正常
+          setMessages((prev) => {
+            const messageIndex = prev.findIndex((msg) => msg.id === messageId);
+            if (messageIndex === -1) {
+              if (process.env.NODE_ENV === "development") {
+                console.warn(`[Chat] 消息 ${messageId.slice(0, 8)}... 不在当前消息列表中，跳过更新`);
+              }
+              return prev;
+            }
+            
+            const updated = [...prev];
+            const currentMessage = prev[messageIndex];
+            
+            // ✅ 更新 parts（完整内容，包含 reasoning、tool、file 等）
+            // 优先使用 data-persisted 事件中的 parts，回退到当前消息的 parts
+            const finalParts = (persistedData.parts && Array.isArray(persistedData.parts) && persistedData.parts.length > 0)
+              ? persistedData.parts
+              : (currentMessage.parts && currentMessage.parts.length > 0 ? currentMessage.parts : []);
+            
+            // ✅ 更新 content（AI SDK 标准字段，确保 getTextFromMessage 能正确提取）
+            // 优先使用 data-persisted 事件中的 content，其次从 parts 提取，最后保留当前消息的 content
+            let finalContent = persistedData.content;
+            if (!finalContent && finalParts.length > 0) {
+              // 从 parts 提取文本内容作为 content
+              const textParts = finalParts.filter((p: any) => p?.type === "text");
+              if (textParts.length > 0) {
+                finalContent = textParts.map((p: any) => p.text || "").join("");
+              }
+            }
+            if (!finalContent) {
+              finalContent = (currentMessage as any).content;
+            }
+            
+            // ✅ 更新 metadata（包含完整的 createdAt、senderName、agentUsed 等）
+            const finalMetadata = {
+              ...currentMessage.metadata,
+              ...persistedData.metadata,
+              createdAt: persistedData.metadata?.createdAt || 
+                        currentMessage.metadata?.createdAt ||
+                        new Date().toISOString(),
+            };
+            
+            // ✅ 构建更新后的消息对象
+            updated[messageIndex] = {
+              ...currentMessage,
+              parts: finalParts,
+              ...(finalContent ? { content: finalContent } : {}),
+              metadata: finalMetadata,
+            };
+            
+            if (process.env.NODE_ENV === "development") {
+              console.log(`[Chat] ✅ 消息已更新: ${messageId.slice(0, 8)}...`, {
+                partsCount: finalParts.length,
+                hasContent: !!finalContent,
+                createdAt: finalMetadata.createdAt,
+              });
+            }
+            
+            return updated;
+          });
         }
       }
       
@@ -167,8 +238,12 @@ export function Chat({
       }
     },
     onFinish: () => {
+      // ✅ AI SDK 最佳实践：metadata 已由 AI SDK 自动合并到消息对象
+      // 后端通过 metadata 事件发送完整 metadata，AI SDK 自动处理，无需前端额外逻辑
+      // 前端可以直接使用 message.metadata 访问完整的 metadata（createdAt、senderName、agentUsed 等）
+      
       // 流式响应完成：标记状态为 idle
-      // 消息保存通过 useEffect 监听 status 变化来处理，确保使用最新的 messages 状态
+      // 消息保存通过后端处理，metadata 已由 AI SDK 自动处理
       startTransition(() => {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
       });
@@ -222,6 +297,113 @@ export function Chat({
   // ✅ 消息保存策略：优先使用后端保存，前端保存作为备用（默认禁用）
   const backendPersistedMessageIdsRef = useRef<Set<string>>(new Set());
   const ENABLE_FRONTEND_SAVE = false; // 设置为 true 可启用前端保存（调试用）
+  
+  // ✅ AI SDK 最佳实践：使用原生 metadata 事件
+  // 后端通过 metadata 事件发送完整 metadata（流式开始时发送基础信息，结束时补充 createdAt）
+  // AI SDK 会自动将 metadata 合并到消息对象，前端无需缓存和应用逻辑
+  
+  // ⚠️ 消息固化函数（保留作为兜底机制）
+  // 优化方案：现在优先使用 data-persisted 事件中的完整信息直接更新消息对象
+  // 此函数保留用于兜底场景（例如 data-persisted 事件处理失败时的降级处理）
+  // 正常情况下不再调用，因为 data-persisted 事件已包含完整的 parts、content 和 metadata
+  const solidifyMessage = useCallback(async (messageId: string) => {
+    try {
+      // 从数据库获取完整消息（包含完整的 parts、metadata 等）
+      const response = await fetch(`/api/messages?chatId=${encodeURIComponent(id)}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn(`[Chat] 获取消息失败 (${response.status})，跳过固化`);
+        }
+        return;
+      }
+
+      const messagesFromDb = await response.json();
+      if (!Array.isArray(messagesFromDb)) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[Chat] 消息数据格式错误，跳过固化");
+        }
+        return;
+      }
+
+      // 找到刚保存的消息
+      const solidifiedMessage = messagesFromDb.find((msg: ChatMessage) => msg.id === messageId);
+      if (!solidifiedMessage) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn(`[Chat] 未找到消息 ${messageId.slice(0, 8)}...，跳过固化`);
+        }
+        return;
+      }
+
+      // 更新消息对象：使用数据库中的完整消息内容
+      // 关键：更新 parts 和 content，确保工具栏功能正常
+      setMessages((prevMessages) => {
+        const messageIndex = prevMessages.findIndex((msg) => msg.id === messageId);
+        if (messageIndex === -1) {
+          if (process.env.NODE_ENV === "development") {
+            console.warn(`[Chat] 消息 ${messageId.slice(0, 8)}... 不在当前消息列表中，跳过固化`);
+          }
+          return prevMessages;
+        }
+
+        const updated = [...prevMessages];
+        const currentMessage = prevMessages[messageIndex];
+        
+        // ✅ 关键修复：使用数据库中的完整 parts（确保内容完整）
+        // 优先使用数据库中的 parts（已保存的完整内容），回退到当前消息的 parts
+        const finalParts = solidifiedMessage.parts && solidifiedMessage.parts.length > 0
+          ? solidifiedMessage.parts
+          : currentMessage.parts;
+        
+        // ✅ 从 parts 提取完整文本内容作为 content（AI SDK 标准字段）
+        // 确保 getTextFromMessage 能正确提取内容
+        const textParts = finalParts.filter((p: any) => p?.type === "text");
+        const extractedContent = textParts.length > 0
+          ? textParts.map((p: any) => p.text || "").join("")
+          : undefined;
+        
+        // 优先使用数据库消息的 content，其次使用提取的内容，最后保留当前消息的 content
+        const finalContent = (solidifiedMessage as any).content || 
+                            extractedContent ||
+                            (currentMessage as any).content;
+
+        updated[messageIndex] = {
+          ...currentMessage,
+          // ✅ 更新 parts（完整内容）
+          parts: finalParts,
+          // ✅ 更新 content（AI SDK 标准字段，确保 getTextFromMessage 能正确提取）
+          ...(finalContent ? { content: finalContent } : {}),
+          // ✅ 更新 metadata（包含完整的 createdAt、senderName、agentUsed 等）
+          metadata: {
+            ...currentMessage.metadata,
+            ...solidifiedMessage.metadata,
+            createdAt: solidifiedMessage.metadata?.createdAt || 
+                      currentMessage.metadata?.createdAt ||
+                      new Date().toISOString(),
+          },
+        };
+
+        if (process.env.NODE_ENV === "development") {
+          console.log(`[Chat] ✅ 消息已固化: ${messageId.slice(0, 8)}...`, {
+            partsCount: finalParts.length,
+            hasContent: !!finalContent,
+            createdAt: updated[messageIndex].metadata?.createdAt,
+          });
+        }
+
+        return updated;
+      });
+    } catch (error) {
+      if (process.env.NODE_ENV === "development") {
+        console.error("[Chat] 消息固化失败:", error);
+      }
+    }
+  }, [id, setMessages]);
 
   // 获取 SSE 消息上下文（用于接收用户-用户消息）
   const { onMessage: onSSEMessage, isConnected: sseConnected } = useSSEMessageContext();
@@ -324,6 +506,13 @@ export function Chat({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // ✅ AI SDK 最佳实践：消息固化标准流程已实现
+  // 1. 后端在流式开始时通过 metadata 事件发送基础 metadata（agentUsed、senderName 等）
+  // 2. 后端在流式结束时通过 metadata 事件发送完整 metadata（包含 createdAt）
+  // 3. AI SDK 自动将 metadata 合并到消息对象
+  // 4. 前端直接使用 message.metadata 访问完整 metadata，无需额外处理
+  // 这样确保消息在流式渲染结束后立即有完整的 metadata（createdAt、senderName、agentUsed 等），且符合 AI SDK 最佳实践
 
   // ✅ 流式响应完成后的保存逻辑（默认禁用，优先使用后端保存）
   const prevStatusRef = useRef(status);
@@ -561,16 +750,19 @@ export function Chat({
           
           if (targetIndex >= 0) {
             // 只更新 metadata，不更新 parts（由 AI SDK 管理）
+            // 注意：完整的 metadata（包括 createdAt）由 AI SDK metadata 事件自动处理，这里只做基本合并
             const updated = [...prev];
             updated[targetIndex] = {
               ...prev[targetIndex],
-              metadata: {
-                ...prev[targetIndex].metadata,
-                ...messageWithMetadata.metadata,
-                createdAt: prev[targetIndex].metadata?.createdAt || 
-                           messageWithMetadata.metadata?.createdAt || 
-                           new Date().toISOString(),
-              },
+                metadata: {
+                  ...prev[targetIndex].metadata,
+                  ...messageWithMetadata.metadata,
+                  // 保留原有的 createdAt（如果有），否则使用消息中的 createdAt
+                  // AI SDK metadata 事件会自动处理完整的 metadata（包含准确的 createdAt）
+                  createdAt: prev[targetIndex].metadata?.createdAt || 
+                             messageWithMetadata.metadata?.createdAt ||
+                             new Date().toISOString(),
+                },
             };
             processedMetadataRef.current.add(eventKey);
             return updated;

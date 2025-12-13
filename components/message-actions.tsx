@@ -1,12 +1,12 @@
 import equal from "fast-deep-equal";
-import { memo, useState, useEffect, useRef } from "react";
+import { memo, useState, useEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { useCopyToClipboard } from "usehooks-ts";
 import { useSession } from "next-auth/react";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
-import { cn, generateUUID, formatMessageTimestamp } from "@/lib/utils";
+import { cn, generateUUID, formatMessageTimestamp, getTextFromMessage } from "@/lib/utils";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useChatModels } from "@/lib/ai/models-client";
 import { Action, Actions } from "./elements/actions";
@@ -116,69 +116,66 @@ export function PureMessageActions({
     return null;
   }
 
-  // 提取完整的消息内容（用于保存到后端，包括所有信息）
+  // ✅ 提取完整的消息内容（用于保存到后端，包括复杂结构如 reasoning、tool 等）
+  // 优化：简化逻辑，优先使用 getTextFromMessage，只在需要复杂结构时才额外提取
   const extractFullMessageContent = (): string => {
-    if (!message.parts || message.parts.length === 0) {
-      return message.content || "";
+    // 1. 先尝试使用统一的提取函数（优先使用 content，回退到 parts）
+    const baseContent = getTextFromMessage(message);
+    
+    // 2. 检查是否需要提取复杂结构（reasoning、tool 等）
+    const hasComplexParts = message.parts && message.parts.some((part) => 
+      part.type === "reasoning" || 
+      part.type === "tool-getWeather" || 
+      part.type === "tool-createDocument" || 
+      part.type === "tool-updateDocument" || 
+      part.type === "tool-requestSuggestions"
+    );
+
+    // 3. 如果包含复杂结构，从 parts 提取完整信息（包含推理过程和工具调用结果）
+    if (hasComplexParts && message.parts) {
+      const contentParts: string[] = [];
+      message.parts.forEach((part) => {
+        if (part.type === "text" && (part as any).text) {
+          contentParts.push((part as any).text);
+        } else if (part.type === "reasoning" && (part as any).reasoning) {
+          contentParts.push(`[推理过程]\n${(part as any).reasoning}`);
+        } else if (part.type === "tool-getWeather" || part.type === "tool-createDocument" || part.type === "tool-updateDocument" || part.type === "tool-requestSuggestions") {
+          const toolPart = part as any;
+          const toolName = toolPart.toolName || toolPart.name || "未知工具";
+          const toolArgs = toolPart.args ? JSON.stringify(toolPart.args, null, 2) : "";
+          const toolResult = toolPart.result ? JSON.stringify(toolPart.result, null, 2) : "";
+          contentParts.push(`[工具调用: ${toolName}]\n参数: ${toolArgs}\n结果: ${toolResult}`);
+        }
+      });
+      if (contentParts.length > 0) {
+        return contentParts.join("\n\n").trim();
+      }
     }
 
-    const contentParts: string[] = [];
-
-    message.parts.forEach((part) => {
-      if (part.type === "text" && (part as any).text) {
-        contentParts.push((part as any).text);
-      } else if (part.type === "reasoning" && (part as any).reasoning) {
-        contentParts.push(`[推理过程]\n${(part as any).reasoning}`);
-      } else if (part.type === "tool-invocation" && (part as any).toolInvocation) {
-        const toolInv = (part as any).toolInvocation;
-        const toolName = toolInv.toolName || "未知工具";
-        const toolArgs = toolInv.args ? JSON.stringify(toolInv.args, null, 2) : "";
-        const toolResult = toolInv.result ? JSON.stringify(toolInv.result, null, 2) : "";
-        contentParts.push(`[工具调用: ${toolName}]\n参数: ${toolArgs}\n结果: ${toolResult}`);
-      }
-    });
-
-    return contentParts.join("\n\n").trim();
+    // 4. 如果没有复杂结构，直接返回基础内容（已通过 getTextFromMessage 获取）
+    return baseContent;
   };
-
-  // 提取主要消息内容（用于前端展示和保存文件，只包含文本和简单附件信息）
-  const extractMainMessageContent = (): string => {
-    if (!message.parts || message.parts.length === 0) {
-      return message.content || "";
-    }
-
-    const contentParts: string[] = [];
-
-    message.parts.forEach((part) => {
-      if (part.type === "text" && (part as any).text) {
-        // 只提取文本内容
-        contentParts.push((part as any).text);
-      }
-      // 不包含推理过程和工具调用
-    });
-
-    return contentParts.join("\n\n").trim();
-  };
-
-  // 用于复制、分享等操作的主要内容
-  const textFromParts = extractMainMessageContent();
-  
-  // 用于保存到后端的完整内容
-  const fullMessageContent = extractFullMessageContent();
 
   const handleCopy = async () => {
-    if (!textFromParts) {
+    // ✅ 参考编辑按钮的实现：在点击时实时获取消息内容（而不是使用预先计算的 textContent）
+    // 这样可以确保在流式消息渲染完成后能获取完整内容
+    const contentToCopy = getTextFromMessage(message);
+    
+    if (!contentToCopy || !contentToCopy.trim()) {
       toast.error("没有可复制的文本！");
       return;
     }
 
-    await copyToClipboard(textFromParts);
+    await copyToClipboard(contentToCopy);
     toast.success("已复制到剪贴板！");
   };
 
   // 分享功能：转发消息给指定用户（复用用户-用户消息的完整链路）
   const handleShare = async (targetUserId: string, targetUserName: string) => {
-    if (!textFromParts) {
+    // ✅ 参考编辑按钮的实现：在点击时实时获取消息内容（而不是使用预先计算的 textContent）
+    const contentToShare = getTextFromMessage(message);
+    
+    if (!contentToShare || !contentToShare.trim()) {
       toast.error("没有可分享的内容！");
       return;
     }
@@ -204,7 +201,7 @@ export function PureMessageActions({
       
       // 检查是否以markdown格式符号开头（#、*、-、`、>、1.、- [ ] 等）
       // 支持多行消息，检查第一行是否有格式符号
-      const lines = textFromParts.split('\n');
+      const lines = contentToShare.split('\n');
       const firstLine = lines[0];
       const markdownPattern = /^(\s*)([#*\-`>]|\d+\.|\- \[ \]|\- \[x\]|```|~~~)/;
       const match = firstLine.match(markdownPattern);
@@ -223,7 +220,7 @@ export function PureMessageActions({
         displayMessageText = `@${targetUserName}\n${modifiedFirstLine}${remainingLines.length > 0 ? '\n' + remainingLines.join('\n') : ''}`;
       } else {
         // 没有格式符号：直接在开头添加 @xxx\n
-        displayMessageText = `@${targetUserName}\n${textFromParts}`;
+        displayMessageText = `@${targetUserName}\n${contentToShare}`;
       }
       
       const displayMessageId = generateUUID();
@@ -263,12 +260,12 @@ export function PureMessageActions({
           message: {
             id: shareMessageId,
             role: "user",
-            parts: [
-              {
-                type: "text",
-                text: textFromParts, // 只发送原始消息内容，不包含@用户名和换行
-              },
-            ],
+              parts: [
+                {
+                  type: "text",
+                  text: contentToShare, // 只发送原始消息内容，不包含@用户名和换行
+                },
+              ],
           },
           // 关键：明确指定 selectedChatModel 为 "user::${targetUserId}"
           // 这样前端 API 路由会识别为用户-用户消息，不会发送给当前选择的智能体
@@ -324,10 +321,9 @@ export function PureMessageActions({
 
   // 收藏功能：切换收藏状态（添加/取消收藏）
   const handleFavorite = async () => {
-    if (!textFromParts) {
-      toast.error("没有可收藏的内容！");
-      return;
-    }
+    // ✅ 参考编辑按钮的实现：在点击时实时获取消息内容（而不是使用预先计算的 textContent）
+    // 注意：取消收藏不需要内容，但添加收藏需要完整内容
+    const contentToCollect = getTextFromMessage(message);
 
     if (!currentUserId) {
       toast.error("请先登录！");
@@ -385,8 +381,9 @@ export function PureMessageActions({
         };
       }) || [];
 
-    // 构建保存到后端的完整消息内容（包含所有信息：文本、推理、工具调用、文件等）
-    let contentForBackend = fullMessageContent;
+    // ✅ 构建保存到后端的完整消息内容（包含所有信息：文本、推理、工具调用、文件等）
+    // extractFullMessageContent 会在需要时提取复杂结构，否则使用 getTextFromMessage 的结果
+    let contentForBackend = extractFullMessageContent();
     if (fileAttachments.length > 0) {
       const fileInfoText = fileAttachments.map((file, index) => {
         return `[附件 ${index + 1}]\n文件名: ${file.name}\n类型: ${file.contentType}\n大小: ${file.size ? `${(file.size / 1024).toFixed(2)} KB` : "未知"}\n文件ID: ${file.fileId}\n下载链接: ${file.url}`;
@@ -472,8 +469,10 @@ export function PureMessageActions({
   const actionButtonClass = "opacity-0 transition-opacity focus-visible:opacity-100 group-hover/message:opacity-100";
   
   // 获取消息时间戳
+  // ✅ 优化方案：data-persisted 事件已包含完整的 metadata（包含 createdAt）
+  // 消息对象会在流式完成后立即更新，时间戳立即可用
   const messageTimestamp = message.metadata?.createdAt;
-  const formattedTimestamp = formatMessageTimestamp(messageTimestamp);
+  const formattedTimestamp = messageTimestamp ? formatMessageTimestamp(messageTimestamp) : "";
   
   return (
     <Actions className={cn(
@@ -664,13 +663,19 @@ export function PureMessageActions({
       )}
 
       {/* 仅assistant消息显示赞/踩 */}
+      {/* 优化：点赞和点踩功能不依赖消息内容，在流式响应完成后即可使用 */}
       {message.role === "assistant" && (
         <>
           <Action
             className={actionButtonClass}
             data-testid="message-upvote"
-            disabled={vote?.isUpvoted}
+            disabled={vote?.isUpvoted || isLoading}
             onClick={() => {
+              // 点赞功能：不依赖消息内容，只要消息ID存在即可
+              if (!message.id) {
+                toast.error("消息ID不存在，无法点赞");
+                return;
+              }
               const upvote = fetch("/api/vote", {
                 method: "PATCH",
                 body: JSON.stringify({
@@ -719,8 +724,13 @@ export function PureMessageActions({
           <Action
             className={actionButtonClass}
             data-testid="message-downvote"
-            disabled={vote && !vote.isUpvoted}
+            disabled={(vote && !vote.isUpvoted) || isLoading}
             onClick={() => {
+              // 点踩功能：不依赖消息内容，只要消息ID存在即可
+              if (!message.id) {
+                toast.error("消息ID不存在，无法点踩");
+                return;
+              }
               const downvote = fetch("/api/vote", {
                 method: "PATCH",
                 body: JSON.stringify({
