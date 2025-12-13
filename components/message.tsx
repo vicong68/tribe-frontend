@@ -219,12 +219,13 @@ const PurePreviewMessage = ({
               // 1. 直接格式：{type: "file", url, name, mediaType, size, fileId, thumbnailUrl}
               // 2. 嵌套格式：{type: "file", file: {file_id, filename, download_url, size, thumbnail_url}}
               const fileObj = (attachment as any).file || attachment;
-              const fileUrl = fileObj.url || fileObj.download_url || attachment.url || "";
+              const attachmentAny = attachment as any;
+              const fileUrl = fileObj.url || fileObj.download_url || attachmentAny.url || "";
               // ✅ 优先使用原始文件名（filename 字段通常是原始文件名）
-              const fileName = fileObj.filename || fileObj.name || attachment.name || attachment.filename || "file";
-              const fileSize = fileObj.size || attachment.size;
-              const fileId = fileObj.fileId || fileObj.file_id || attachment.fileId || attachment.file_id;
-              const contentType = fileObj.mediaType || fileObj.file_type || attachment.mediaType || attachment.file_type;
+              const fileName = fileObj.filename || fileObj.name || attachmentAny.name || attachmentAny.filename || "file";
+              const fileSize = fileObj.size || attachmentAny.size;
+              const fileId = fileObj.fileId || fileObj.file_id || attachmentAny.fileId || attachmentAny.file_id;
+              const contentType = fileObj.mediaType || fileObj.file_type || attachmentAny.mediaType || attachmentAny.file_type;
               // ✅ 支持缩略图URL
               const thumbnailUrl = fileObj.thumbnailUrl || fileObj.thumbnail_url || (attachment as any).thumbnailUrl;
               
