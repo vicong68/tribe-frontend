@@ -8,6 +8,16 @@ const authFormSchema = z.object({
   password: z.string().min(6, "密码至少需要6个字符"),
 });
 
+const registerFormSchema = z.object({
+  email: z.string().email("无效的邮箱地址"),
+  password: z.string().min(6, "密码至少需要6个字符"),
+  nickname: z.string().min(1, "昵称不能为空").max(100, "昵称不能超过100个字符"),
+  user_group: z.enum(["初级", "中级", "高级"], {
+    errorMap: () => ({ message: "请选择有效的用户分组" }),
+  }),
+  introduction: z.string().max(500, "自我介绍不能超过500个字符").optional(),
+});
+
 export type LoginActionState = {
   status: "idle" | "in_progress" | "success" | "failed" | "invalid_data";
   message?: string;
@@ -92,9 +102,13 @@ export const register = async (
   formData: FormData
 ): Promise<RegisterActionState> => {
   try {
-    const validatedData = authFormSchema.parse({
+    // 验证注册表单数据（包含额外字段）
+    const validatedData = registerFormSchema.parse({
       email: formData.get("email"),
       password: formData.get("password"),
+      nickname: formData.get("nickname"),
+      user_group: formData.get("user_group"),
+      introduction: formData.get("introduction") || "",
     });
 
     // 先调用内部注册 API 路由
@@ -108,7 +122,9 @@ export const register = async (
       body: JSON.stringify({
         email: validatedData.email,
         password: validatedData.password,
-        nickname: validatedData.email.split("@")[0],
+        nickname: validatedData.nickname,
+        user_group: validatedData.user_group,
+        introduction: validatedData.introduction || "",
       }),
     });
 

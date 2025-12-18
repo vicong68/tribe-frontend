@@ -47,21 +47,19 @@ export async function GET(request: NextRequest) {
     );
 
     if (!response.ok) {
-      // 如果返回 404，说明消息未收藏
-      if (response.status === 404) {
-        return NextResponse.json({ is_collected: false, collection: null });
+      // 404 或其他错误都返回未收藏状态，避免阻塞消息发送流程
+      if (response.status !== 404) {
+        console.warn(`[Collections Check API] 后端返回错误 ${response.status}`);
       }
-      throw new Error("检查收藏状态失败");
+      return NextResponse.json({ is_collected: false, collection: null });
     }
 
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error("[Collections Check API] Error:", error);
-    return NextResponse.json(
-      { error: "检查收藏状态失败" },
-      { status: 500 }
-    );
+    // 任何错误都返回未收藏状态，避免阻塞消息发送流程
+    console.warn("[Collections Check API] Error:", error);
+    return NextResponse.json({ is_collected: false, collection: null });
   }
 }
 

@@ -107,7 +107,7 @@ export function KnowledgeFolderItem({
         "group relative flex items-center gap-2 bg-sidebar p-2 transition-all hover:bg-accent cursor-pointer overflow-visible z-10",
         // 合并上下边缘：去掉圆角及外边框，仅首尾保持轻微圆角以融入区域
         "rounded-none -mt-px first:mt-0 first:rounded-t-md last:rounded-b-md",
-        isSelected && "ring-1 ring-primary bg-primary/10",
+        isSelected && "bg-primary/10", // ✅ 去掉选中后的边框线，只保留背景色
         isDragging && "cursor-grabbing"
       )}
       onClick={handleClick}

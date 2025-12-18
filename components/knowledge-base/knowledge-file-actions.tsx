@@ -54,6 +54,7 @@ export function KnowledgeFileActions({
   return (
     <div
       className="absolute right-1 top-1 flex items-center gap-0.5 rounded bg-background/90 backdrop-blur-sm p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+      style={{ zIndex: 9999 }} // ✅ 确保工具栏图标在最上层，避免被搜索框挡住
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >

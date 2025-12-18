@@ -9,21 +9,27 @@
 /**
  * 生成统一的 session_id
  * 
+ * ✅ 重要：必须使用ID字段，不使用显示名称
+ * - participant1: 必须是用户ID（member_id，邮箱格式，如 "Vicong@qq.com"）
+ * - participant2: 必须是 Agent ID（如 "chat", "rag"）或用户ID（member_id）
+ * - 不使用昵称或显示名称，因为昵称不唯一（可能有重名）
+ * 
  * 标准格式：session_{participant1}_{participant2}
  * 规则：
  * 1. participant1 和 participant2 按字母序排序，确保顺序一致
  * 2. 如果 participant2 是 user::member_id 格式，自动移除 user:: 前缀
  * 3. 所有 ID 必须大小写敏感，不进行转换
+ * 4. 确保使用ID而不是显示名称，保证唯一性
  * 
- * @param participant1 参与者1（通常是用户ID，member_id）
+ * @param participant1 参与者1（用户ID，member_id，邮箱格式，如 "Vicong@qq.com"）
  * @param participant2 参与者2（Agent ID 如 "chat"/"rag"，或 user::member_id 格式的用户ID）
  * @returns 格式化的 session_id: session_{participant1}_{participant2}
  * 
  * @example
- * generateSessionId("Vicong", "chat") // "session_Vicong_chat"
- * generateSessionId("Vicong", "user::RedWM") // "session_RedWM_Vicong" (移除 user:: 前缀)
- * generateSessionId("user123", "user456") // "session_user123_user456"
- * generateSessionId("user456", "user123") // "session_user123_user456" (顺序一致)
+ * generateSessionId("Vicong@qq.com", "chat") // "session_Vicong@qq.com_chat"
+ * generateSessionId("Vicong@qq.com", "user::RedWM@qq.com") // "session_RedWM@qq.com_Vicong@qq.com" (移除 user:: 前缀)
+ * generateSessionId("user123@qq.com", "user456@qq.com") // "session_user123@qq.com_user456@qq.com"
+ * generateSessionId("user456@qq.com", "user123@qq.com") // "session_user123@qq.com_user456@qq.com" (顺序一致)
  */
 export function generateSessionId(
   participant1: string,

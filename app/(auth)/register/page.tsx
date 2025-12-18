@@ -58,7 +58,7 @@ export default function Page() {
             使用您的邮箱和密码创建账号
           </p>
         </div>
-        <AuthForm action={handleSubmit} defaultEmail={email}>
+        <AuthForm action={handleSubmit} defaultEmail={email} isRegister={true}>
           <SubmitButton isSuccessful={isSuccessful}>注册</SubmitButton>
           <p className="mt-4 text-center text-gray-600 text-sm dark:text-zinc-400">
             {"已有账号？"}

@@ -20,9 +20,9 @@ export async function GET(request: NextRequest) {
       params.append("user_id", userId);
     }
 
-    // 调用后端 API（带超时和错误处理）
+    // ✅ 修复：添加缓存控制，确保获取最新数据
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
     
     try {
       const response = await fetchWithErrorHandlers(
@@ -31,12 +31,18 @@ export async function GET(request: NextRequest) {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
+            // ✅ 修复：添加缓存控制头，确保不使用缓存
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
           },
           signal: controller.signal,
+          // ✅ 修复：Next.js fetch 缓存控制
+          cache: "no-store",
         },
         {
-          maxRetries: 2,
-          retryDelay: 1000,
+          maxRetries: 1,  // 减少重试次数
+          retryDelay: 500,  // 减少重试延迟
         }
       );
       clearTimeout(timeoutId);

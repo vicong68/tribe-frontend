@@ -16,11 +16,19 @@ const STATIC_AGENTS = ["chat", "rag"]; // 对应司仪和书吏
 /**
  * 从后端获取 agents 和 users 列表
  * @param includeUsers 是否包含用户列表（仅登录用户）
+ * @param userId 当前用户ID（可选），如果提供，用户列表只返回该用户的好友
  */
-export async function fetchChatModels(includeUsers: boolean = false): Promise<ChatModel[]> {
+export async function fetchChatModels(includeUsers: boolean = false, userId?: string | null): Promise<ChatModel[]> {
   try {
+    // ✅ 优化：如果提供了userId，传递到后端，确保只返回好友（与好友列表一致）
+    const url = new URL(`${BACKEND_URL}/api/agents`);
+    url.searchParams.set("format", "simple");
+    if (userId) {
+      url.searchParams.set("user_id", userId);
+    }
+    
     // 获取 agents 列表（使用 simple 格式，包含所有 agents 和 users）
-    const response = await fetch(`${BACKEND_URL}/api/agents?format=simple`, {
+    const response = await fetch(url.toString(), {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
@@ -110,13 +118,28 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
 /**
  * 清除用户列表缓存（用于刷新在线状态）
+ * @param includeUsers 是否包含用户列表
+ * @param userId 用户ID（可选），如果提供，只清除该用户的缓存
  */
-export function clearModelsCache(includeUsers: boolean = true) {
-  const cacheKey = `models_${includeUsers}`;
-  delete modelsCache[cacheKey];
-  // 如果清除用户列表缓存，也清除包含用户的缓存
-  if (includeUsers) {
-    delete modelsCache["models_true"];
+export function clearModelsCache(includeUsers: boolean = true, userId?: string | null) {
+  // ✅ 优化：如果提供了userId，只清除该用户的缓存；否则清除所有相关缓存
+  if (userId) {
+    const cacheKey = `models_${includeUsers}_${userId}`;
+    delete modelsCache[cacheKey];
+  } else {
+    // 清除所有相关缓存（向后兼容）
+    const cacheKey = `models_${includeUsers}`;
+    delete modelsCache[cacheKey];
+    // 如果清除用户列表缓存，也清除包含用户的缓存
+    if (includeUsers) {
+      delete modelsCache["models_true"];
+      // ✅ 清除所有可能的userId缓存（使用通配符匹配）
+      Object.keys(modelsCache).forEach((key) => {
+        if (key.startsWith(`models_${includeUsers}_`)) {
+          delete modelsCache[key];
+        }
+      });
+    }
   }
 }
 
@@ -125,13 +148,15 @@ export function clearModelsCache(includeUsers: boolean = true) {
  * 使用模块级缓存和请求去重，避免重复查询
  * @param includeUsers 是否包含用户列表（仅登录用户）
  * @param refreshKey 刷新键，改变时会强制重新获取（用于刷新在线状态）
+ * @param userId 当前用户ID（可选），如果提供，用户列表只返回该用户的好友
  */
-export function useChatModels(includeUsers: boolean = false, refreshKey: number = 0) {
+export function useChatModels(includeUsers: boolean = false, refreshKey: number = 0, userId?: string | null) {
   const [models, setModels] = useState<ChatModel[]>(getFallbackModels());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const cacheKey = `models_${includeUsers}`;
+    // ✅ 优化：将userId包含在缓存键中，确保不同用户的好友列表不混淆
+    const cacheKey = `models_${includeUsers}_${userId || 'none'}`;
     const cached = modelsCache[cacheKey];
     const now = Date.now();
     
@@ -161,9 +186,9 @@ export function useChatModels(includeUsers: boolean = false, refreshKey: number 
 
     // 发起新请求（仅在开发环境且首次查询时输出日志）
     if (process.env.NODE_ENV === "development" && !cached) {
-      console.log("[useChatModels] Fetching models, includeUsers:", includeUsers);
+      console.log("[useChatModels] Fetching models, includeUsers:", includeUsers, "userId:", userId);
     }
-    const fetchPromise = fetchChatModels(includeUsers)
+    const fetchPromise = fetchChatModels(includeUsers, userId)
       .then((fetchedModels) => {
         // 仅在开发环境输出详细日志（减少日志噪音）
         if (process.env.NODE_ENV === "development") {
@@ -194,7 +219,7 @@ export function useChatModels(includeUsers: boolean = false, refreshKey: number 
       .catch(() => {
         setLoading(false);
       });
-  }, [includeUsers, refreshKey]); // 添加 refreshKey 作为依赖
+  }, [includeUsers, refreshKey, userId]); // ✅ 添加 userId 作为依赖
 
   return { models, loading };
 }

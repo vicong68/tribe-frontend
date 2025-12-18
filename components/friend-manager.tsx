@@ -150,13 +150,25 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              fromUserId: currentUserId,
-              toUserId: result.id,
+              from_user_id: currentUserId, // ✅ 修复：使用下划线命名，匹配后端API
+              to_user_id: result.id, // ✅ 修复：使用下划线命名，匹配后端API
             }),
           });
 
           if (!response.ok) {
-            throw new Error("发送好友申请失败");
+            // ✅ 优化：获取后端返回的错误信息
+            const errorData = await response.json().catch(() => ({}));
+            const errorDetail = errorData.detail || "发送好友申请失败";
+            
+            // ✅ 修复：如果是"已发送过"的错误，显示友好提示，不抛出错误
+            if (errorDetail === "REQUEST_EXISTS" || errorDetail.includes("已发送过")) {
+              toast.info("已发送过好友请求，待对方处理");
+              setSearchQuery("");
+              setSearchResults([]);
+              return; // 直接返回，不抛出错误
+            }
+            
+            throw new Error(errorDetail);
           }
 
           toast.success(`已向 ${result.name} 发送好友申请`);
@@ -165,7 +177,9 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
         }
       } catch (error) {
         console.error("添加好友失败:", error);
-        toast.error("操作失败，请稍后重试");
+        // ✅ 优化：显示具体的错误信息
+        const errorMessage = error instanceof Error ? error.message : "操作失败，请稍后重试";
+        toast.error(errorMessage);
       } finally {
         setIsAdding(false);
       }

@@ -140,7 +140,13 @@ function PureMultimodalInput({
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
   const { data: session } = useSession();
-  const { models: chatModels } = useChatModels(session?.user?.type === "regular");
+  // ✅ 获取当前用户ID（用于好友列表过滤）
+  const isLoggedIn = session?.user?.type === "regular";
+  const currentUserId = isLoggedIn && session?.user 
+    ? (session.user.memberId || session.user.email?.split("@")[0] || session.user.id || null)
+    : null;
+  // ✅ 从后端获取模型列表（登录用户包含用户列表，只返回好友）
+  const { models: chatModels } = useChatModels(isLoggedIn, 0, currentUserId);
   const selectedRecipient = chatModels.find((model) => model.id === selectedModelId);
   const placeholderRecipientName = selectedRecipient?.name || "消息收方";
   const inputPlaceholder = `@${placeholderRecipientName} 发送消息...`;
@@ -157,9 +163,16 @@ function PureMultimodalInput({
     // 这样可以避免流式响应开始时用户消息不可见的问题
     const isUserToUser = selectedModelId.startsWith("user::");
     const selectedChatModel = chatModels.find((m) => m.id === selectedModelId);
+    // ✅ 优化：确保receiverName使用用户名称而不是ID（用户-用户模式）
     let receiverName = selectedChatModel?.name || selectedModelId;
-    if (isUserToUser && !selectedChatModel) {
-      receiverName = selectedModelId.replace(/^user::/, "");
+    if (isUserToUser) {
+      // 用户-用户模式：优先使用chatModels中的用户名称，如果没有找到则使用ID（但会在后端补齐）
+      if (selectedChatModel) {
+        receiverName = selectedChatModel.name; // 使用用户名称
+      } else {
+        // 如果chatModels中没有找到，使用ID作为兜底（后端会补齐为名称）
+        receiverName = selectedModelId.replace(/^user::/, "");
+      }
     }
     
     // 验证消息内容
@@ -872,8 +885,13 @@ function PureModelSelectorCompact({
   const isLoggedIn = userType === "regular";
   const [statusVersion, setStatusVersion] = useState(0);
   
-  // 从后端获取模型列表（登录用户包含用户列表）
-  const { models: chatModels } = useChatModels(isLoggedIn);
+  // ✅ 获取当前用户ID（用于好友列表过滤）
+  const currentUserId = isLoggedIn && session?.user 
+    ? (session.user.memberId || session.user.email?.split("@")[0] || session.user.id || null)
+    : null;
+  
+  // ✅ 从后端获取模型列表（登录用户包含用户列表，只返回好友）
+  const { models: chatModels } = useChatModels(isLoggedIn, 0, currentUserId);
 
   // 用户在线状态（用于统一头像在线/离线标记）
   const { fetchUserStatus, handleStatusUpdate, getCachedStatus } = useUserStatus({
@@ -1075,7 +1093,8 @@ function PureModelSelectorCompact({
               .filter((m) => m.type === "agent")
               .map((model) => (
                 <SelectItem key={model.id} value={model.name}>
-                  <div className="flex items-center gap-2.5 min-w-0">
+                  {/* ✅ 优化：稍微紧凑的格式（减少间距，与用户保持一致） */}
+                  <div className="flex items-center gap-2 min-w-0">
                     <UnifiedAvatar
                       name={model.name}
                       id={model.id}
@@ -1110,7 +1129,8 @@ function PureModelSelectorCompact({
                 
                 return (
                   <SelectItem key={model.id} value={model.name}>
-                    <div className="flex items-center gap-2.5 min-w-0">
+                    {/* ✅ 优化：稍微紧凑的格式（减少间距） */}
+                    <div className="flex items-center gap-2 min-w-0">
                       <UnifiedAvatar
                         name={model.name}
                         id={model.id}

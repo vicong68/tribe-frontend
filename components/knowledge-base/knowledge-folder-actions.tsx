@@ -65,7 +65,8 @@ export function KnowledgeFolderActions({
 
   return (
     <div
-      className="flex items-center gap-0.5 rounded bg-background/90 backdrop-blur-sm p-0.5 opacity-0 transition-opacity group-hover:opacity-100 z-50 relative"
+      className="flex items-center gap-0.5 rounded bg-background/90 backdrop-blur-sm p-0.5 opacity-0 transition-opacity group-hover:opacity-100 relative"
+      style={{ zIndex: 9999 }} // ✅ 确保工具栏图标在最上层，避免被搜索框挡住
       onClick={onContainerClick}
       onMouseDown={onContainerClick}
     >

@@ -400,38 +400,17 @@ export async function saveMessages({ messages }: { messages: DBMessage[] }) {
     return await db.insert(message).values(messages);
   } catch (error) {
     // 如果是重复键错误（主键冲突），忽略它（幂等性）
-    // 这可以防止并发请求或重试导致的重复保存错误
     if (
       error instanceof Error &&
       (error.message.includes("duplicate key") ||
         error.message.includes("UNIQUE constraint") ||
-        error.message.includes("23505")) // PostgreSQL unique violation error code
+        error.message.includes("23505"))
     ) {
       console.warn(
         `[saveMessages] Message(s) already exist (idempotent), skipping: ${messages.map((m) => m.id).join(", ")}`
       );
-      // 返回成功，因为消息已经存在
       return;
     }
-
-    // 输出详细错误信息以便调试（非重复键错误）
-    console.error("[saveMessages] Database error details:", {
-      error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      errorName: error instanceof Error ? error.name : "Unknown",
-      stack: error instanceof Error ? error.stack : undefined,
-      messagesCount: messages.length,
-      firstMessage: messages[0] ? {
-        id: messages[0].id,
-        chatId: messages[0].chatId,
-        role: messages[0].role,
-        hasParts: !!messages[0].parts,
-        hasAttachments: !!messages[0].attachments,
-        hasMetadata: !!(messages[0] as any).metadata,
-        partsType: typeof messages[0].parts,
-        attachmentsType: typeof messages[0].attachments,
-      } : null,
-    });
     throw new ChatSDKError(
       "bad_request:database",
       `Failed to save messages: ${error instanceof Error ? error.message : String(error)}`

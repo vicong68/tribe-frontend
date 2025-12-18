@@ -7,6 +7,7 @@ import { Input } from "../ui/input";
 import { PlusIcon } from "../icons";
 import { Search as SearchIcon } from "lucide-react";
 import useSWR, { useSWRConfig } from "swr";
+import { folderApi } from "@/lib/knowledge-base-api";
 
 interface KnowledgeFolderToolbarProps {
   searchQuery: string;
@@ -24,34 +25,16 @@ export function KnowledgeFolderToolbar({
   const { mutate } = useSWRConfig();
   const [isCreating, setIsCreating] = useState(false);
 
+  // ✅ 最佳实践：简化前端逻辑，验证由后端完成
   const handleCreateFolder = async () => {
     const folderName = prompt("请输入文件夹名称：");
     if (!folderName?.trim()) return;
 
     setIsCreating(true);
-
     try {
-      const response = await fetch("/api/knowledge-base/folders", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          folder_name: folderName.trim(),
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("创建文件夹失败");
-      }
-
-      // 刷新文件夹列表
+      await folderApi.create(folderName.trim());
       mutate("/api/knowledge-base/folders");
-
-      toast({
-        type: "success",
-        description: "文件夹创建成功",
-      });
+      toast({ type: "success", description: "文件夹创建成功" });
     } catch (error) {
       toast({
         type: "error",
@@ -63,7 +46,7 @@ export function KnowledgeFolderToolbar({
   };
 
   return (
-    <div className="flex items-center gap-1.5 border-b border-sidebar-border bg-sidebar p-2 relative z-0">
+    <div className="flex items-center gap-1.5 border-b border-sidebar-border bg-sidebar p-2 relative z-[1]">
       {/* 新建文件夹按钮 */}
       <Button
         variant="default"

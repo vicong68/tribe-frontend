@@ -82,11 +82,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       user: {
-        email: validatedData.email,
-        member_id: data.member_data.member_id,
+        email: validatedData.email,  // 前端使用 email，但后端 member_id 就是 email 格式
+        member_id: data.member_data.member_id,  // member_id 就是 email 格式
         nickname: data.member_data.nickname || validatedData.email.split("@")[0],
         user_group: data.member_data.user_group,
-        email_from_backend: data.member_data.email,
       },
     });
   } catch (error) {

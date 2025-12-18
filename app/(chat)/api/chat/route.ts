@@ -277,19 +277,15 @@ export async function POST(request: Request) {
       : selectedChatModel;
     
     // 在消息创建时获取收发方名称（仅查询一次，固化到metadata）
-    // 用户消息的发送方名称：优先使用后端返回的昵称，否则使用memberId，最后使用email前缀
-    // 注意：必须大小写敏感，不能从email提取（email可能大小写不一致）
-    // 访客用户显示中文"访客"，登录用户显示memberId或email前缀
+    // 用户消息的发送方名称：使用用户昵称（session.user.name包含nickname，大小写敏感）
+    // 访客用户显示中文"访客"，登录用户显示昵称（nickname）
     let senderName = "我";
     if (session.user.type === "guest") {
       // 访客用户显示中文"访客"
       senderName = "访客";
-    } else if (session.user.memberId) {
-      // 优先使用memberId（后端标准ID）
-      senderName = session.user.memberId;
-    } else if (session.user.email) {
-      // 如果memberId不存在，才从email提取（保持向后兼容）
-      senderName = session.user.email.split("@")[0];
+    } else if (session.user.name) {
+      // 使用用户昵称（session.user.name包含后端返回的nickname，大小写敏感）
+      senderName = session.user.name;
     }
     // 接收方名称：从后端获取（Agent 或用户）
     // 注意：必须确保 targetId 是正确的 agent_id 或 member_id
@@ -486,7 +482,7 @@ export async function POST(request: Request) {
         const aiResponse = result.ai_response || result.response || "";
 
         // 用户-用户消息不需要AI回复，直接返回空响应
-        // 消息已通过WebSocket实时推送，这里只需要返回成功状态
+        // 消息已通过SSE实时推送，这里只需要返回成功状态
         // 返回一个简单的流式响应格式（AI SDK期望的格式）
         const { readable, writable } = new TransformStream();
         const writer = writable.getWriter();

@@ -24,9 +24,9 @@ export async function GET(request: NextRequest) {
       params.append("folder_id", folderId);
     }
 
-    // 调用后端 API（带超时和错误处理）
+    // 调用后端 API（优化：减少超时和重试次数）
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时（减少等待时间）
     
     try {
       const response = await fetchWithErrorHandlers(
@@ -39,8 +39,8 @@ export async function GET(request: NextRequest) {
           signal: controller.signal,
         },
         {
-          maxRetries: 2,
-          retryDelay: 1000,
+          maxRetries: 1,  // 减少重试次数
+          retryDelay: 500,  // 减少重试延迟
         }
       );
       clearTimeout(timeoutId);

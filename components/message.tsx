@@ -204,73 +204,108 @@ const PurePreviewMessage = ({
       }
     }
     
+    // ✅ 检查是否有文本内容（用于判断是否需要在文件下方显示@xxx）
+    const hasTextContent = messageParts.some((part) => {
+      if (part.type === "text") {
+        const textContent = (part as any).text || (part as any).content || "";
+        return textContent && textContent.trim().length > 0;
+      }
+      return false;
+    });
+    
+    // ✅ 用户-用户模式：如果只有文件没有文本，需要在文件下方显示@xxx
+    const shouldShowMentionForFiles = 
+      isLocalUser && 
+      communicationType === "user_user" && 
+      attachmentsFromMessage.length > 0 && 
+      !hasTextContent && 
+      receiverName;
+    
     return (
       <>
         {attachmentsFromMessage.length > 0 && (
           <div
-            className={cn("flex flex-row gap-2", {
-              "justify-end": isLocalUser,
-              "justify-start": !isLocalUser,
+            className={cn("flex flex-col gap-2", {
+              "items-end": isLocalUser,
+              "items-start": !isLocalUser,
             })}
             data-testid={"message-attachments"}
           >
-            {attachmentsFromMessage.map((attachment, index) => {
-              // 支持多种文件附件格式：
-              // 1. 直接格式：{type: "file", url, name, mediaType, size, fileId, thumbnailUrl}
-              // 2. 嵌套格式：{type: "file", file: {file_id, filename, download_url, size, thumbnail_url}}
-              const fileObj = (attachment as any).file || attachment;
-              const attachmentAny = attachment as any;
-              const fileUrl = fileObj.url || fileObj.download_url || attachmentAny.url || "";
-              // ✅ 优先使用原始文件名（filename 字段通常是原始文件名）
-              const fileName = fileObj.filename || fileObj.name || attachmentAny.name || attachmentAny.filename || "file";
-              const fileSize = fileObj.size || attachmentAny.size;
-              const fileId = fileObj.fileId || fileObj.file_id || attachmentAny.fileId || attachmentAny.file_id;
-              const contentType = fileObj.mediaType || fileObj.file_type || attachmentAny.mediaType || attachmentAny.file_type;
-              // ✅ 支持缩略图URL
-              const thumbnailUrl = fileObj.thumbnailUrl || fileObj.thumbnail_url || (attachment as any).thumbnailUrl;
-              
-              return (
-                <PreviewAttachment
-                  key={fileUrl || fileId || `${fileName}-${index}`}
-                  attachment={{
-                    name: fileName,
-                    contentType: contentType,
-                    url: fileUrl,
-                    size: fileSize,
-                    fileId: fileId,
-                    thumbnailUrl: thumbnailUrl, // ✅ 传递缩略图URL
-                  }}
-                  isInMessage={true}
-                  onDownload={() => {
-                    // 下载文件：用户-用户模式直接下载，用户-Agent模式也支持下载
-                    // ✅ 下载时使用原始文件名
-                    if (fileUrl) {
-                      const link = document.createElement("a");
-                      link.href = fileUrl;
-                      link.download = fileName;
-                      link.target = "_blank";
-                      link.rel = "noopener noreferrer"; // 安全属性
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                    } else {
-                      // 如果没有URL，尝试通过fileId下载
-                      if (fileId) {
-                        const downloadUrl = `/api/files/download/${fileId}`;
+            <div
+              className={cn("flex flex-row gap-2", {
+                "justify-end": isLocalUser,
+                "justify-start": !isLocalUser,
+              })}
+            >
+              {attachmentsFromMessage.map((attachment, index) => {
+                // 支持多种文件附件格式：
+                // 1. 直接格式：{type: "file", url, name, mediaType, size, fileId, thumbnailUrl}
+                // 2. 嵌套格式：{type: "file", file: {file_id, filename, download_url, size, thumbnail_url}}
+                const fileObj = (attachment as any).file || attachment;
+                const attachmentAny = attachment as any;
+                const fileUrl = fileObj.url || fileObj.download_url || attachmentAny.url || "";
+                // ✅ 优先使用原始文件名（filename 字段通常是原始文件名）
+                const fileName = fileObj.filename || fileObj.name || attachmentAny.name || attachmentAny.filename || "file";
+                const fileSize = fileObj.size || attachmentAny.size;
+                const fileId = fileObj.fileId || fileObj.file_id || attachmentAny.fileId || attachmentAny.file_id;
+                const contentType = fileObj.mediaType || fileObj.file_type || attachmentAny.mediaType || attachmentAny.file_type;
+                // ✅ 支持缩略图URL
+                const thumbnailUrl = fileObj.thumbnailUrl || fileObj.thumbnail_url || (attachment as any).thumbnailUrl;
+                
+                return (
+                  <PreviewAttachment
+                    key={fileUrl || fileId || `${fileName}-${index}`}
+                    attachment={{
+                      name: fileName,
+                      contentType: contentType,
+                      url: fileUrl,
+                      size: fileSize,
+                      fileId: fileId,
+                      thumbnailUrl: thumbnailUrl, // ✅ 传递缩略图URL
+                    }}
+                    isInMessage={true}
+                    onDownload={() => {
+                      // 下载文件：用户-用户模式直接下载，用户-Agent模式也支持下载
+                      // ✅ 下载时使用原始文件名
+                      if (fileUrl) {
                         const link = document.createElement("a");
-                        link.href = downloadUrl;
+                        link.href = fileUrl;
                         link.download = fileName;
                         link.target = "_blank";
-                        link.rel = "noopener noreferrer";
+                        link.rel = "noopener noreferrer"; // 安全属性
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
+                      } else {
+                        // 如果没有URL，尝试通过fileId下载
+                        if (fileId) {
+                          const downloadUrl = `/api/files/download/${fileId}`;
+                          const link = document.createElement("a");
+                          link.href = downloadUrl;
+                          link.download = fileName;
+                          link.target = "_blank";
+                          link.rel = "noopener noreferrer";
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }
                       }
-                    }
-                  }}
-                />
-              );
-            })}
+                    }}
+                  />
+                );
+              })}
+            </div>
+            {/* ✅ 用户-用户模式：如果只有文件没有文本，在文件下方显示@xxx */}
+            {shouldShowMentionForFiles && (
+              <div
+                className={cn("text-sm text-foreground/70", {
+                  "text-right": isLocalUser,
+                  "text-left": !isLocalUser,
+                })}
+              >
+                @{receiverName}
+              </div>
+            )}
           </div>
         )}
 

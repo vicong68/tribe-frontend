@@ -106,7 +106,7 @@ export function KnowledgeFileToolbar({
   });
 
   return (
-    <div className="flex items-center gap-1.5 border-b border-sidebar-border bg-sidebar p-2 relative z-0">
+    <div className="flex items-center gap-1.5 border-b border-sidebar-border bg-sidebar p-2 relative z-[1]">
       {/* 批量上传按钮 */}
       <div {...getRootProps()} className="flex-shrink-0">
         <input {...getInputProps()} />

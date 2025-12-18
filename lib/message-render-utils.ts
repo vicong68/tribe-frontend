@@ -135,13 +135,14 @@ export function getMessageRenderInfo(
   let agentId: string | undefined;
   
   if (isLocalUser) {
-    // 本地用户：优先使用 metadata，其次从 session 获取
+    // 本地用户：优先使用当前 session 中的用户昵称，其次使用 metadata 中已固化的名称（大小写敏感）
     if (session?.user?.type === "guest") {
       senderName = meta.senderName || "访客";
     } else {
-      senderName = meta.senderName || session?.user?.email?.split("@")[0] || "我";
+      // 优先级：session.user.name（当前用户昵称，大小写敏感） > meta.senderName（消息创建时固化的名称，大小写敏感）
+      senderName = session?.user?.name || meta.senderName || "我";
     }
-    senderId = meta.senderId || session?.user?.memberId || session?.user?.email?.split("@")[0];
+    senderId = meta.senderId || session?.user?.memberId || undefined;
   } else if (isAgent) {
     // Agent 消息：优先使用后端固化的 agentUsed/senderName
     // 统一缓存机制：首次解析时写入缓存，后续直接使用缓存，不受selectedModelId变化影响
@@ -249,10 +250,15 @@ export function getMessageRenderInfo(
     receiverName = meta.receiverName;
     const isSharedMessage = Boolean((meta as any)?.isSharedMessage);
     
-    // 用户-用户直发：补齐收件人名称
+    // ✅ 用户-用户直发：从 chatModels 查找用户显示名称（确保使用名称而不是ID）
     if (communicationType === "user_user" && !receiverName) {
       const receiverId = meta.receiverId as string | undefined;
-      receiverName = receiverId?.replace(/^user::/, "");
+      if (receiverId) {
+        // 确保 receiverId 格式为 user::member_id
+        const normalizedReceiverId = receiverId.startsWith("user::") ? receiverId : `user::${receiverId}`;
+        // 从 chatModels 查找用户显示名称
+        receiverName = findDisplayName(chatModels, normalizedReceiverId, "user", receiverId.replace(/^user::/, ""), modelLookup);
+      }
     }
     
     // 用户-Agent 消息：从 chatModels 查找 Agent 显示名称

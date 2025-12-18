@@ -15,18 +15,56 @@ import { Separator } from "./ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { FriendManager } from "./friend-manager";
 import { UnifiedAvatar } from "./unified-avatar";
+import { Button } from "./ui/button";
+import { toast } from "sonner";
+import useSWR from "swr";
 
 /**
  * 好友列表组件
  * 复用消息框下拉列表逻辑，稳定渲染：agents + 远端用户（登录状态）
  */
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
+
+interface PendingFriendRequest {
+  id: string;
+  from_user_id: string;
+  from_nickname: string;
+  from_avatar_icon: string;
+  to_user_id: string;
+  status: string;
+  created_at?: string;
+}
+
+interface FriendsListResponse {
+  success: boolean;
+  friends: any[];
+  pending_requests: PendingFriendRequest[];
+}
+
 export function FriendsList() {
   const { data: session, status } = useSession();
   const isLoggedIn = session?.user?.type === "regular";
   const [refreshKey, setRefreshKey] = useState(0);
+  
+  // ✅ 获取待处理的好友请求
+  const currentUserId = isLoggedIn && session?.user ? getBackendMemberId(session.user) : null;
+  const { data: friendsData, mutate: mutateFriends } = useSWR<FriendsListResponse>(
+    currentUserId ? `${BACKEND_URL}/api/friends?user_id=${currentUserId}` : null,
+    async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("获取好友列表失败");
+      return response.json();
+    },
+    {
+      refreshInterval: 5000, // 每5秒刷新一次
+      revalidateOnFocus: true,
+    }
+  );
+  
+  const pendingRequests = friendsData?.pending_requests || [];
 
-  // 从后端获取模型列表（登录用户包含用户列表）
-  const { models: chatModels, loading: modelsLoading } = useChatModels(isLoggedIn, refreshKey);
+  // ✅ 从后端获取模型列表（登录用户包含用户列表，只返回好友）
+  const { models: chatModels, loading: modelsLoading } = useChatModels(isLoggedIn, refreshKey, currentUserId);
 
   // 用户状态管理（快速查询和SSE推送更新）
   const { fetchUserStatus, handleStatusUpdate, getCachedStatus } = useUserStatus({
@@ -47,6 +85,8 @@ export function FriendsList() {
     const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
     if (!currentUserId) return [];
     
+    // ✅ 优化：统一使用chatModels（后端已只返回好友，确保与消息框下拉列表一致）
+    // chatModels现在只包含当前用户的好友（通过user_id参数过滤）
     return chatModels.filter((chatModel) => {
       if (chatModel.type !== "user") return false;
       // 排除当前用户
@@ -83,6 +123,40 @@ export function FriendsList() {
     }
   }, [isLoggedIn, availableUsers.length, fetchUserStatus, handleStatusUpdate]);
 
+  // ✅ 接受好友请求
+  const handleAcceptRequest = useCallback(async (requestId: string) => {
+    if (!currentUserId) return;
+    
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/friends/request/${requestId}/accept`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_id: currentUserId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || "接受好友请求失败");
+      }
+
+      toast.success("已添加好友");
+      // ✅ 刷新好友列表和模型列表（确保新好友立即显示）
+      mutateFriends();
+      // ✅ 强制刷新模型列表（清除当前用户的缓存并重新获取）
+      clearModelsCache(true, currentUserId);
+      setRefreshKey((prev) => prev + 1);
+      // ✅ 触发好友更新事件，通知其他组件刷新
+      window.dispatchEvent(new CustomEvent("sse_friend_update"));
+    } catch (error) {
+      console.error("接受好友请求失败:", error);
+      toast.error(error instanceof Error ? error.message : "接受好友请求失败");
+    }
+  }, [currentUserId, mutateFriends]);
+
   // 监听好友更新事件（SSE推送）
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -90,6 +164,12 @@ export function FriendsList() {
     const handleFriendUpdate = () => {
       // 刷新好友列表
       setRefreshKey((prev) => prev + 1);
+      mutateFriends();
+    };
+
+    const handleFriendRequestUpdate = () => {
+      // 刷新好友请求列表
+      mutateFriends();
     };
 
     const handleUserStatusUpdate = (event: Event) => {
@@ -107,13 +187,15 @@ export function FriendsList() {
     };
 
     window.addEventListener("sse_friend_update", handleFriendUpdate);
+    window.addEventListener("sse_friend_request_update", handleFriendRequestUpdate);
     window.addEventListener("sse_user_status_update", handleUserStatusUpdate);
 
     return () => {
       window.removeEventListener("sse_friend_update", handleFriendUpdate);
+      window.removeEventListener("sse_friend_request_update", handleFriendRequestUpdate);
       window.removeEventListener("sse_user_status_update", handleUserStatusUpdate);
     };
-  }, [isLoggedIn, handleStatusUpdate]);
+  }, [isLoggedIn, handleStatusUpdate, mutateFriends]);
 
   // 加载中状态（包括 session 加载和 models 加载）
   // 统一处理加载状态，避免服务器端和客户端渲染不一致导致的 hydration 错误
@@ -288,6 +370,95 @@ export function FriendsList() {
                       </div>
                     );
                   })}
+                  
+                  {/* ✅ 待处理的好友请求（显示在用户列表底部） */}
+                  {pendingRequests.length > 0 && (
+                    <>
+                      {usersWithAvatars.length > 0 && <Separator className="my-3" />}
+                      <div className="space-y-2">
+                        {pendingRequests.map((request) => (
+                          <div
+                            key={request.id}
+                            className={cn(
+                              "flex items-center gap-3 px-2 py-2 rounded-lg",
+                              "bg-sidebar-accent/50 border border-sidebar-border"
+                            )}
+                          >
+                            <UnifiedAvatar
+                              name={request.from_nickname}
+                              id={`user::${request.from_user_id}`}
+                              isAgent={false}
+                              size={8}
+                              showStatus={false}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium truncate">
+                                {request.from_nickname}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                请求添加好友
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7 px-3 text-xs"
+                              onClick={() => handleAcceptRequest(request.id)}
+                            >
+                              同意
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+            
+            {/* ✅ 如果只有待处理的好友请求，没有用户好友 */}
+            {usersWithAvatars.length === 0 && pendingRequests.length > 0 && (
+              <>
+                {agentsWithAvatars.length > 0 && <Separator className="my-3" />}
+                <div className="space-y-3">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2">
+                    用户
+                  </div>
+                  <div className="space-y-2">
+                    {pendingRequests.map((request) => (
+                      <div
+                        key={request.id}
+                        className={cn(
+                          "flex items-center gap-3 px-2 py-2 rounded-lg",
+                          "bg-sidebar-accent/50 border border-sidebar-border"
+                        )}
+                      >
+                        <UnifiedAvatar
+                          name={request.from_nickname}
+                          id={`user::${request.from_user_id}`}
+                          isAgent={false}
+                          size={8}
+                          showStatus={false}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">
+                            {request.from_nickname}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            请求添加好友
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="default"
+                          className="h-7 px-3 text-xs"
+                          onClick={() => handleAcceptRequest(request.id)}
+                        >
+                          同意
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </>
             )}

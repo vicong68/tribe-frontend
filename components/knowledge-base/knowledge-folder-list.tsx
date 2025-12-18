@@ -6,6 +6,8 @@ import useSWR, { useSWRConfig } from "swr";
 import { KnowledgeFolderItem, type KnowledgeFolder } from "./knowledge-folder-item";
 import { toast } from "../toast";
 import { useState } from "react";
+import { folderApi } from "@/lib/knowledge-base-api";
+import { swrConfig } from "@/lib/swr-config";
 
 interface KnowledgeFolderListProps {
   selectedFolderId: string | null;
@@ -28,47 +30,34 @@ export function KnowledgeFolderList({
   onBackgroundClick,
   searchQuery,
 }: KnowledgeFolderListProps) {
-  const { mutate } = useSWRConfig();
+  // 获取全局 mutate 函数用于刷新其他 key 的缓存
+  const { mutate: mutateGlobal } = useSWRConfig();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // 获取文件夹列表
-  const { data: folders, isLoading, error } = useSWR<KnowledgeFolder[]>(
+  // ✅ 最佳实践：简化前端逻辑，统一使用 API 封装和配置
+  const { data: folders, isLoading, error, mutate } = useSWR<KnowledgeFolder[]>(
     "/api/knowledge-base/folders",
-    async (url) => {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Failed to fetch folders");
-      return response.json();
-    }
+    folderApi.list,
+    swrConfig
   );
 
-  // 处理文件夹删除
+  // ✅ 最佳实践：简化前端逻辑，所有验证和错误处理由后端完成
   const handleDelete = async (folderId: string) => {
     if (!confirm("确定要删除这个文件夹吗？文件夹中的文件不会被删除，只是移出文件夹。")) {
       return;
     }
 
     try {
-      const response = await fetch(`/api/knowledge-base/folders/${folderId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        throw new Error("删除失败");
-      }
-
-      // 刷新文件夹列表和文件列表
-      mutate("/api/knowledge-base/folders");
-      mutate("/api/knowledge-base/files");
+      await folderApi.delete(folderId);
+      // 统一刷新：后端操作成功后自动刷新相关数据
+      mutate(); // 刷新当前 key
+      mutateGlobal("/api/knowledge-base/files"); // 刷新文件列表
       
-      // 如果删除的是当前选中的文件夹，取消选中
       if (selectedFolderId === folderId) {
         onSelectFolder(null);
       }
       
-      toast({
-        type: "success",
-        description: "文件夹已删除",
-      });
+      toast({ type: "success", description: "文件夹已删除" });
     } catch (error) {
       toast({
         type: "error",
@@ -77,36 +66,18 @@ export function KnowledgeFolderList({
     }
   };
 
-  // 处理文件夹编辑
+  // ✅ 最佳实践：简化前端逻辑，验证由后端完成
   const handleEdit = async (folderId: string) => {
     const folder = folders?.find((f) => f.folder_id === folderId);
     if (!folder) return;
 
     const newFolderName = prompt("请输入新文件夹名称：", folder.folder_name);
-    if (!newFolderName || newFolderName.trim() === folder.folder_name) return;
+    if (!newFolderName?.trim()) return;
 
     try {
-      const response = await fetch(`/api/knowledge-base/folders/${folderId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          folder_name: newFolderName.trim(),
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("更新失败");
-      }
-
-      // 刷新文件夹列表
-      mutate("/api/knowledge-base/folders");
-      
-      toast({
-        type: "success",
-        description: "文件夹已重命名",
-      });
+      await folderApi.update(folderId, newFolderName.trim());
+      mutate(); // 刷新当前 key
+      toast({ type: "success", description: "文件夹已重命名" });
     } catch (error) {
       toast({
         type: "error",
@@ -207,66 +178,31 @@ export function KnowledgeFolderList({
     if (!name?.trim()) return;
 
     try {
-      const response = await fetch("/api/knowledge-base/folders", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          folder_name: name.trim(),
-          parent_id: parentId,
-        }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "创建失败");
-      }
-
-      mutate("/api/knowledge-base/folders");
-      toast({
-        type: "success",
-        description: "子文件夹已创建",
-      });
-    } catch (err) {
+      await folderApi.create(name.trim(), parentId);
+      mutate(); // 刷新当前 key
+      toast({ type: "success", description: "文件夹已创建" });
+    } catch (error) {
       toast({
         type: "error",
-        description: err instanceof Error ? err.message : "创建失败",
+        description: error instanceof Error ? error.message : "创建失败",
       });
     }
   };
 
+  // ✅ 最佳实践：简化前端逻辑，所有验证由后端处理
   const handleMove = async (folderId: string) => {
     const target = prompt("移动到目标文件夹ID（留空则为根）：", "");
     const targetId = target?.trim() || null;
-    if (targetId === folderId) {
-      toast({ type: "error", description: "不能移动到自身" });
-      return;
-    }
 
     try {
-      const response = await fetch(`/api/knowledge-base/folders/${folderId}/move`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ parent_id: targetId }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "移动失败");
-      }
-
-      mutate("/api/knowledge-base/folders");
-      toast({
-        type: "success",
-        description: "文件夹已移动",
-      });
-    } catch (err) {
+      // 后端会自动验证：不能移动到自身、循环检测、层级深度等
+      await folderApi.move(folderId, targetId);
+      mutate(); // 刷新当前 key
+      toast({ type: "success", description: "文件夹已移动" });
+    } catch (error) {
       toast({
         type: "error",
-        description: err instanceof Error ? err.message : "移动失败",
+        description: error instanceof Error ? error.message : "移动失败",
       });
     }
   };
