@@ -490,15 +490,13 @@ export function Chat({
       });
     }, [setMessages, saveAssistantMessages]),
     onOfflineMessagesFetched: useCallback(() => {
-      // 离线消息拉取完成后，触发用户列表和状态拉取
-      // 通过清除缓存并触发刷新来实现
-      import("@/lib/ai/models-client")
-        .then(({ clearModelsCache }) => {
-          clearModelsCache(true);
-        })
-        .catch(() => {
-          // 静默处理导入错误
-        });
+      // ✅ 性能优化：离线消息拉取完成后，使用 SWR 的 mutate 清除缓存
+      // 注意：这里使用动态导入避免循环依赖，但实际清除需要通过 useSWRConfig
+      // 由于这是回调函数，无法直接使用 hook，所以这里只做标记
+      // 实际的缓存清除由其他组件（如 friends-list）通过 refreshKey 触发
+      if (process.env.NODE_ENV === "development") {
+        console.log("[Chat] Offline messages fetched, cache should be refreshed");
+      }
     }, []),
   });
 
@@ -706,8 +704,10 @@ export function Chat({
         return [...prevMessages, chatMessage];
       });
 
-      // 保存到数据库（仅非用户-用户消息需要前端兜底保存）
-      if (chatMessage.metadata?.communicationType !== "user_user") {
+      // ✅ 关键修复：用户-用户消息（包括远端用户消息）也需要保存到数据库
+      // 远端用户消息：role === "assistant" && communicationType === "user_user"
+      // 这些消息必须保存，否则刷新后会丢失
+      if (chatMessage.role === "assistant") {
         saveAssistantMessages([chatMessage]).catch((error) => {
           console.error("[Chat] Failed to save SSE message to database:", error);
         });

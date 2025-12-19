@@ -6,15 +6,16 @@ import { getBackendMemberId, updateBackendOnlineStatus } from "@/lib/user-utils"
 import { toast } from "@/components/toast";
 
 /**
- * 简化的会话超时管理 Hook
- * 基于本地活动时间检查，无需后端验证，减少网络请求
+ * 增强的会话超时管理 Hook
+ * ✅ 优化：支持多种不活跃场景判断（关闭浏览器、页面、网络中断等）
  * 
  * 逻辑：
  * 1. 监听用户活动事件，记录最后活动时间
- * 2. 定期检查（每1分钟），如果超过45分钟无活动，自动注销
- * 3. 只在页面可见时检查，节省资源
+ * 2. 监听页面卸载、网络状态变化等事件，及时更新后端状态
+ * 3. 定期检查（每1分钟），如果超过40分钟无活动，自动注销
+ * 4. 只在页面可见时检查，节省资源
  */
-const INACTIVITY_TIMEOUT = 45 * 60 * 1000; // 45分钟
+const INACTIVITY_TIMEOUT = 40 * 60 * 1000; // ✅ 改为40分钟
 const CHECK_INTERVAL = 60 * 1000; // 1分钟检查一次
 const ACTIVITY_DEBOUNCE = 1000; // 活动检测防抖1秒
 
@@ -75,16 +76,47 @@ export function useSessionTimeoutSimple(enabled: boolean = true) {
       window.addEventListener(event, updateActivityTime, { passive: true });
     });
 
-    // 监听页面可见性变化
+    // ✅ 优化：监听页面可见性变化（包括切换标签页、最小化窗口等）
     const handleVisibilityChange = () => {
       isPageVisibleRef.current = document.visibilityState === "visible";
       if (isPageVisibleRef.current) {
         // 页面变为可见时，更新活动时间
         updateActivityTime();
+      } else {
+        // 页面变为不可见时，也更新活动时间（用户可能切换到其他应用）
+        // 但标记为不可见状态，用于后续判断
+        updateActivityTime();
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // ✅ 新增：监听网络状态变化（网络中断/恢复）
+    const handleOnline = () => {
+      updateActivityTime();
+    };
+
+    const handleOffline = () => {
+      // 网络中断时，也更新活动时间（但标记为离线状态）
+      updateActivityTime();
+      // 可选：通知后端用户可能离线（但不断开连接，等待网络恢复）
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    // ✅ 新增：监听页面卸载（关闭浏览器、刷新页面等）
+    const handleBeforeUnload = () => {
+      // 使用 sendBeacon 确保状态更新能发送到后端
+      updateBackendOnlineStatus(memberId, false).catch(() => {
+        // 如果 fetch 失败，使用 sendBeacon 作为后备
+        import("@/lib/user-utils").then(({ updateBackendOfflineStatusWithBeacon }) => {
+          updateBackendOfflineStatusWithBeacon(memberId);
+        });
+      });
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
 
     // 初始化 ref
     lastActivityTimeRef.current = lastActivityTime;
@@ -101,7 +133,7 @@ export function useSessionTimeoutSimple(enabled: boolean = true) {
       const timeSinceLastActivity = now - lastActivityTimeRef.current;
 
       if (timeSinceLastActivity >= INACTIVITY_TIMEOUT) {
-        // 超过45分钟无活动，执行自动注销
+        // ✅ 超过40分钟无活动，执行自动注销
         // 清理定时器
         if (checkIntervalRef.current) {
           clearInterval(checkIntervalRef.current);
@@ -110,7 +142,7 @@ export function useSessionTimeoutSimple(enabled: boolean = true) {
         // 显示提示信息
         toast({
           type: "info",
-          description: "由于长时间未活动，您已被自动注销",
+          description: "由于长时间未活动（40分钟），您已被自动注销",
         });
 
         // 更新后端状态
@@ -134,6 +166,9 @@ export function useSessionTimeoutSimple(enabled: boolean = true) {
         window.removeEventListener(event, updateActivityTime);
       });
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }

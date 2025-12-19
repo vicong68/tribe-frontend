@@ -26,7 +26,7 @@ import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { useChatModels } from "@/lib/ai/models-client";
+import { useAgents, useUsers } from "@/lib/ai/models-client";
 import { preloadAvatars } from "@/lib/avatar-utils";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
@@ -56,6 +56,7 @@ import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
 import type { VisibilityType } from "./visibility-selector";
+import { EntityFinder } from "@/lib/entity-utils";
 
 function PureMultimodalInput({
   chatId,
@@ -146,7 +147,10 @@ function PureMultimodalInput({
     ? (session.user.memberId || session.user.email?.split("@")[0] || session.user.id || null)
     : null;
   // ✅ 从后端获取模型列表（登录用户包含用户列表，只返回好友）
-  const { models: chatModels } = useChatModels(isLoggedIn, 0, currentUserId);
+  // ✅ 性能优化：分离获取智能体和用户列表
+  const { models: agents } = useAgents();
+  const { models: users } = useUsers(isLoggedIn ? currentUserId : null, 0);
+  const chatModels = useMemo(() => isLoggedIn ? [...agents, ...users] : agents, [agents, users, isLoggedIn]);
   const selectedRecipient = chatModels.find((model) => model.id === selectedModelId);
   const placeholderRecipientName = selectedRecipient?.name || "消息收方";
   const inputPlaceholder = `@${placeholderRecipientName} 发送消息...`;
@@ -162,18 +166,11 @@ function PureMultimodalInput({
     // 预先构建 metadata，确保在发送消息时就有完整的 metadata
     // 这样可以避免流式响应开始时用户消息不可见的问题
     const isUserToUser = selectedModelId.startsWith("user::");
-    const selectedChatModel = chatModels.find((m) => m.id === selectedModelId);
-    // ✅ 优化：确保receiverName使用用户名称而不是ID（用户-用户模式）
-    let receiverName = selectedChatModel?.name || selectedModelId;
-    if (isUserToUser) {
-      // 用户-用户模式：优先使用chatModels中的用户名称，如果没有找到则使用ID（但会在后端补齐）
-      if (selectedChatModel) {
-        receiverName = selectedChatModel.name; // 使用用户名称
-      } else {
-        // 如果chatModels中没有找到，使用ID作为兜底（后端会补齐为名称）
-        receiverName = selectedModelId.replace(/^user::/, "");
-      }
-    }
+    // ✅ 使用统一的 EntityFinder 获取接收者名称
+    const receiverInfo = isUserToUser
+      ? { name: EntityFinder.findDisplayName(chatModels, selectedModelId, "user", selectedModelId.replace(/^user::/, "")), type: "user" as const }
+      : { name: EntityFinder.findDisplayName(chatModels, selectedModelId, "agent", selectedModelId), type: "agent" as const };
+    const receiverName = receiverInfo.name;
     
     // 验证消息内容
     const hasText = input.trim().length > 0;
@@ -891,7 +888,10 @@ function PureModelSelectorCompact({
     : null;
   
   // ✅ 从后端获取模型列表（登录用户包含用户列表，只返回好友）
-  const { models: chatModels } = useChatModels(isLoggedIn, 0, currentUserId);
+  // ✅ 性能优化：分离获取智能体和用户列表
+  const { models: agents } = useAgents();
+  const { models: users } = useUsers(isLoggedIn ? currentUserId : null, 0);
+  const chatModels = useMemo(() => isLoggedIn ? [...agents, ...users] : agents, [agents, users, isLoggedIn]);
 
   // 用户在线状态（用于统一头像在线/离线标记）
   const { fetchUserStatus, handleStatusUpdate, getCachedStatus } = useUserStatus({

@@ -11,7 +11,7 @@ import {
   isAgentMessage,
   isRemoteUserMessage,
 } from "@/lib/avatar-utils";
-import { useChatModels } from "@/lib/ai/models-client";
+import { useAgents, useUsers } from "@/lib/ai/models-client";
 import { useDataStream } from "./data-stream-provider";
 import { getMessageRenderInfo, getThinkingMessageRenderInfo } from "@/lib/message-render-utils";
 import { DocumentToolResult } from "./document";
@@ -79,7 +79,37 @@ const PurePreviewMessage = ({
   
   // ✅ 统一使用消息渲染工具函数，简化代码逻辑
   // Hooks必须在顶层调用，但可以通过参数控制是否实际加载
-  const { models: chatModels } = useChatModels(false); // 总是加载agents列表，但不包含用户列表
+  // ✅ 性能优化：根据消息类型动态加载用户列表（如果是用户-用户模式）
+  // 检查消息是否是用户-用户模式：包括本地用户消息和远端用户消息
+  const messageCommunicationType = (metadata as any)?.communicationType;
+  const isUserToUserMessage = messageCommunicationType === "user_user";
+  // 检查是否是远端用户消息（assistant 角色但 communicationType 是 user_user）
+  const isRemoteUserMsg = message.role === "assistant" && isUserToUserMessage;
+  // ✅ 优化：即使 metadata 中没有 communicationType，也检查 receiverId 是否是用户ID
+  // 如果 receiverId 是用户ID格式（包含@或 user:: 前缀），也需要加载用户列表
+  const receiverId = (metadata as any)?.receiverId;
+  const receiverIdIsUser = receiverId && (
+    receiverId.includes("@") || 
+    receiverId.startsWith("user::") ||
+    !receiverId.includes("::") // 没有 :: 分隔符的可能是用户ID
+  );
+  // ✅ 关键修复：检查 metadata 中是否有 receiverName，如果有但看起来像ID，也需要加载用户列表
+  // 这确保刷新后即使 metadata 中的 receiverName 是ID，也能正确解析为显示名称
+  const metadataReceiverName = (metadata as any)?.receiverName;
+  const receiverNameIsId = metadataReceiverName && (
+    metadataReceiverName.includes("@") ||
+    metadataReceiverName === receiverId ||
+    metadataReceiverName.startsWith("user::")
+  );
+  // 如果消息是用户-用户模式（本地用户消息或远端用户消息），或接收者是用户，或receiverName是ID，需要加载用户列表
+  const needsUserList = isUserToUserMessage || isRemoteUserMsg || (message.role === "user" && receiverIdIsUser) || (message.role === "user" && receiverNameIsId);
+  const currentUserId = isLoggedIn && session?.user 
+    ? (session.user.memberId || session.user.email?.split("@")[0] || session.user.id || null)
+    : null;
+  // 如果需要用户列表，加载用户列表以正确解析用户名称
+  const { models: agents } = useAgents();
+  const { models: users } = useUsers(needsUserList && isLoggedIn ? currentUserId : null, 0);
+  const chatModels = useMemo(() => needsUserList && isLoggedIn ? [...agents, ...users] : agents, [agents, users, needsUserList, isLoggedIn]);
   const effectiveModelLookup = useMemo(() => {
     if (modelLookup && Object.keys(modelLookup).length > 0) {
       return modelLookup;
@@ -104,8 +134,8 @@ const PurePreviewMessage = ({
   }, [message, metadata, selectedModelId, session, chatModels, effectiveModelLookup]);
   
   // 从渲染信息中提取需要的变量（保持向后兼容）
-  const { senderName, receiverName, avatarSeed, senderId, isAgent, isRemoteUser, isLocalUser } = renderInfo;
-  const communicationType = renderInfo.communicationType;
+  const { senderName, receiverName, avatarSeed, senderId, isAgent, isRemoteUser, isLocalUser, communicationType: renderCommunicationType } = renderInfo;
+  const communicationType = renderCommunicationType;
   
   // ✅ 优化：获取发送者ID（用于在线状态），简化逻辑
   const senderIdForStatus = useMemo(() => {
@@ -670,7 +700,8 @@ export const ThinkingMessage = ({
   modelLookup?: Record<string, { name?: string }>;
 }) => {
   // ✅ 统一使用思考消息渲染工具函数，确保与流式消息的渲染信息保持一致
-  const { models: chatModels } = useChatModels(false); // 总是加载 agents 列表，但不包含用户列表
+  // ✅ 使用 useAgents 加载智能体列表（不包含用户列表）
+  const { models: chatModels } = useAgents();
   const effectiveModelLookup = useMemo(() => {
     if (modelLookup && Object.keys(modelLookup).length > 0) {
       return modelLookup;

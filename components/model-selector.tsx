@@ -12,7 +12,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
-import { useChatModels, clearModelsCache } from "@/lib/ai/models-client";
+import { useSWRConfig } from "swr";
+import { useAgents, useUsers, clearModelsCache } from "@/lib/ai/models-client";
 import { getAvatarInfo, preloadAvatars } from "@/lib/avatar-utils";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useUserStatus } from "@/hooks/use-user-status";
@@ -79,6 +80,7 @@ export function ModelSelector({
   session: Session;
   selectedModelId: string;
 } & React.ComponentProps<typeof Button>) {
+  const { mutate: globalMutate } = useSWRConfig();
   const [open, setOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新
   const [optimisticModelId, setOptimisticModelId] =
@@ -139,9 +141,14 @@ export function ModelSelector({
   const userType = session.user.type;
   const isLoggedIn = userType === "regular";
   
-  // 从后端获取模型列表（登录用户包含用户列表）
-  // 使用 refreshKey 来强制刷新（当打开下拉时）
-  const { models: chatModels, loading: modelsLoading } = useChatModels(isLoggedIn, refreshKey);
+  // ✅ 性能优化：分离获取智能体和用户列表
+  // 智能体列表：稳定，加载快，使用全局缓存
+  // 用户列表：按需加载，支持实时更新
+  const currentUserId = isLoggedIn && session?.user ? getBackendMemberId(session.user) : null;
+  const { models: agents, loading: agentsLoading } = useAgents();
+  const { models: users, loading: usersLoading } = useUsers(isLoggedIn ? currentUserId : null, refreshKey);
+  const chatModels = useMemo(() => isLoggedIn ? [...agents, ...users] : agents, [agents, users, isLoggedIn]);
+  const modelsLoading = agentsLoading || usersLoading;
 
   // 用户状态管理（快速查询和SSE推送更新）
   const { fetchUserStatus, handleStatusUpdate, getCachedStatus } = useUserStatus({
@@ -222,8 +229,15 @@ export function ModelSelector({
         handleStatusUpdate(statusMap);
       }
       
-      // 方案2：同时清除缓存并强制刷新完整列表（作为兜底）
-      clearModelsCache(true);
+      // ✅ 性能优化：使用 SWR 的 mutate 清除缓存并强制刷新完整列表（作为兜底）
+      const cacheKeys = clearModelsCache(true);
+      cacheKeys.forEach((key) => {
+        if (key.endsWith("*")) {
+          globalMutate((k) => typeof k === "string" && k.startsWith(key.slice(0, -1)));
+        } else {
+          globalMutate(key);
+        }
+      });
       setRefreshKey((prev) => prev + 1);
     }
   };

@@ -46,7 +46,8 @@ const PureChatItem = ({
   const compactTitle = useMemo(() => {
     const date = chat.createdAt ? new Date(chat.createdAt) : null;
     if (date && !Number.isNaN(date.getTime())) {
-      return format(date, "MM-dd HH:mm");
+      // ✅ 统一时间格式为"12/18 09:04"
+      return format(date, "MM/dd HH:mm");
     }
     return chat.title;
   }, [chat.createdAt, chat.title]);

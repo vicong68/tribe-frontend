@@ -1,8 +1,8 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useChatModels, clearModelsCache } from "@/lib/ai/models-client";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useAgents, useUsers } from "@/lib/ai/models-client";
 import { getAvatarInfo, preloadAvatars } from "@/lib/avatar-utils";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useUserStatus } from "@/hooks/use-user-status";
@@ -17,7 +17,7 @@ import { FriendManager } from "./friend-manager";
 import { UnifiedAvatar } from "./unified-avatar";
 import { Button } from "./ui/button";
 import { toast } from "sonner";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 
 /**
  * 好友列表组件
@@ -45,6 +45,7 @@ export function FriendsList() {
   const { data: session, status } = useSession();
   const isLoggedIn = session?.user?.type === "regular";
   const [refreshKey, setRefreshKey] = useState(0);
+  const { mutate: globalMutate } = useSWRConfig();
   
   // ✅ 获取待处理的好友请求
   const currentUserId = isLoggedIn && session?.user ? getBackendMemberId(session.user) : null;
@@ -56,23 +57,49 @@ export function FriendsList() {
       return response.json();
     },
     {
-      refreshInterval: 5000, // 每5秒刷新一次
-      revalidateOnFocus: true,
+      // ✅ 性能优化：减少轮询频率，使用智能刷新策略
+      refreshInterval: 30000, // 30秒刷新一次（降低服务器压力）
+      revalidateOnFocus: true, // 窗口聚焦时刷新
+      revalidateOnReconnect: true, // 网络重连时刷新
+      dedupingInterval: 5000, // 5秒内的重复请求会被去重
     }
   );
   
   const pendingRequests = friendsData?.pending_requests || [];
 
-  // ✅ 从后端获取模型列表（登录用户包含用户列表，只返回好友）
-  const { models: chatModels, loading: modelsLoading } = useChatModels(isLoggedIn, refreshKey, currentUserId);
+  // ✅ 性能优化：分离获取智能体和用户列表
+  // 智能体列表：稳定，加载快，使用全局缓存
+  // 用户列表：按需加载，支持实时更新
+  const { models: agents, loading: agentsLoading } = useAgents();
+  const { models: users, loading: usersLoading } = useUsers(currentUserId, refreshKey);
+  
+  // ✅ 优化：使用 useMemo 稳定合并结果，避免不必要的重新计算
+  const chatModels = useMemo(() => {
+    // 只有当数据真正变化时才重新合并
+    return [...agents, ...users];
+  }, [agents, users]);
+  
+  // ✅ 优化：只在真正加载时才显示加载状态
+  const modelsLoading = agentsLoading || (usersLoading && refreshKey === 0); // 首次加载才显示加载状态
+
+  // ✅ 优化：使用防抖来减少刷新频率，避免闪烁
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debouncedRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      setRefreshKey((prev) => prev + 1);
+    }, 300); // 300ms 防抖，避免频繁刷新
+  }, []);
 
   // 用户状态管理（快速查询和SSE推送更新）
   const { fetchUserStatus, handleStatusUpdate, getCachedStatus } = useUserStatus({
     isLoggedIn,
     onStatusUpdate: useCallback((updates: Map<string, boolean>) => {
-      // 当收到状态更新时，更新本地模型列表中的在线状态
-      setRefreshKey((prev) => prev + 1);
-    }, []),
+      // ✅ 优化：使用防抖刷新，避免频繁更新导致闪烁
+      debouncedRefresh();
+    }, [debouncedRefresh]),
   });
 
   // 分离 agents 和 users
@@ -96,9 +123,13 @@ export function FriendsList() {
     });
   }, [chatModels, isLoggedIn, session]);
 
-  // 预加载所有模型的头像信息，并更新用户在线状态（从缓存）
+  // ✅ 优化：预加载所有模型的头像信息，并更新用户在线状态（从缓存）
+  // 使用稳定的依赖，避免频繁重新计算
   const modelsWithAvatars = useMemo(() => {
     const allModels = [...availableAgents, ...availableUsers];
+    // ✅ 优化：只有当模型列表真正变化时才重新计算
+    if (allModels.length === 0) return [];
+    
     const models = preloadAvatars(allModels);
     // 更新用户在线状态（从缓存）
     return models.map((model) => {
@@ -112,14 +143,20 @@ export function FriendsList() {
     });
   }, [availableAgents, availableUsers, getCachedStatus]);
 
-  // 组件挂载时刷新用户状态
+  // ✅ 优化：组件挂载时刷新用户状态（只执行一次，避免重复刷新）
+  const hasFetchedStatusRef = useRef(false);
   useEffect(() => {
-    if (isLoggedIn && availableUsers.length > 0) {
+    if (isLoggedIn && availableUsers.length > 0 && !hasFetchedStatusRef.current) {
+      hasFetchedStatusRef.current = true;
       fetchUserStatus().then((statusMap) => {
         if (statusMap.size > 0) {
           handleStatusUpdate(statusMap);
         }
       });
+    }
+    // 重置标志，当用户列表变化时允许重新获取
+    if (availableUsers.length === 0) {
+      hasFetchedStatusRef.current = false;
     }
   }, [isLoggedIn, availableUsers.length, fetchUserStatus, handleStatusUpdate]);
 
@@ -146,9 +183,11 @@ export function FriendsList() {
       toast.success("已添加好友");
       // ✅ 刷新好友列表和模型列表（确保新好友立即显示）
       mutateFriends();
-      // ✅ 强制刷新模型列表（清除当前用户的缓存并重新获取）
-      clearModelsCache(true, currentUserId);
-      setRefreshKey((prev) => prev + 1);
+      // ✅ 优化：使用防抖刷新，避免频繁更新
+      if (currentUserId) {
+        globalMutate(`users_${currentUserId}`);
+      }
+      debouncedRefresh();
       // ✅ 触发好友更新事件，通知其他组件刷新
       window.dispatchEvent(new CustomEvent("sse_friend_update"));
     } catch (error) {
@@ -162,13 +201,13 @@ export function FriendsList() {
     if (!isLoggedIn) return;
 
     const handleFriendUpdate = () => {
-      // 刷新好友列表
-      setRefreshKey((prev) => prev + 1);
+      // ✅ 优化：使用防抖刷新，避免频繁更新
+      debouncedRefresh();
       mutateFriends();
     };
 
     const handleFriendRequestUpdate = () => {
-      // 刷新好友请求列表
+      // 刷新好友请求列表（不需要刷新模型列表）
       mutateFriends();
     };
 
@@ -181,8 +220,7 @@ export function FriendsList() {
         updates.set(member_id, is_online);
         updates.set(`user::${member_id}`, is_online);
         handleStatusUpdate(updates);
-        // 刷新列表以显示最新状态
-        setRefreshKey((prev) => prev + 1);
+        // ✅ 优化：不需要额外刷新，handleStatusUpdate 已经会触发防抖刷新
       }
     };
 
@@ -194,8 +232,12 @@ export function FriendsList() {
       window.removeEventListener("sse_friend_update", handleFriendUpdate);
       window.removeEventListener("sse_friend_request_update", handleFriendRequestUpdate);
       window.removeEventListener("sse_user_status_update", handleUserStatusUpdate);
+      // ✅ 清理防抖定时器
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
     };
-  }, [isLoggedIn, handleStatusUpdate, mutateFriends]);
+  }, [isLoggedIn, handleStatusUpdate, mutateFriends, debouncedRefresh]);
 
   // 加载中状态（包括 session 加载和 models 加载）
   // 统一处理加载状态，避免服务器端和客户端渲染不一致导致的 hydration 错误
@@ -251,7 +293,8 @@ export function FriendsList() {
         <CardTitle className="text-sm font-semibold">好友列表</CardTitle>
           <FriendManager
             onRefresh={() => {
-              setRefreshKey((prev) => prev + 1);
+              // ✅ 优化：使用防抖刷新，避免频繁更新
+              debouncedRefresh();
             }}
           />
         </div>

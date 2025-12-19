@@ -21,6 +21,7 @@ import { generateTitleFromUserMessage, updateChatTitleAsync } from "../../action
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 import { entityCache } from "@/lib/cache/entity-cache";
 import { z } from "zod";
+import type { UIMessage } from "ai";
 
 const BACKEND_API_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
@@ -147,16 +148,12 @@ export async function POST(request: Request) {
   }
 
   try {
+    // ✅ 优化：直接使用已定义的类型，代码更简洁
     const {
       id,
       message,
       selectedChatModel,
       selectedVisibilityType,
-    }: {
-      id: string;
-      message: ChatMessage;
-      selectedChatModel: ChatModel["id"];
-      selectedVisibilityType: VisibilityType;
     } = requestBody;
 
     const session = await auth();
@@ -205,8 +202,15 @@ export async function POST(request: Request) {
       if (messageText && messageText.trim().length > 0) {
         try {
           // 1. 使用轻量级标题生成（快速、不阻塞主流程）
+          // 将 PostRequestBody['message'] 转换为 UIMessage 格式
+          // 注意：UIMessage 不需要 content 字段，getTextFromMessage 会从 parts 中提取文本
+          const uiMessage: UIMessage = {
+            id: message.id,
+            role: message.role,
+            parts: message.parts as UIMessage["parts"], // 类型断言：PostRequestBody['message'].parts 格式与 UIMessage.parts 兼容
+          };
           title = await generateTitleFromUserMessage({
-            message,
+            message: uiMessage,
             userId: backendMemberId,
             lightweight: true, // 使用轻量级模式
           });
@@ -287,11 +291,62 @@ export async function POST(request: Request) {
       // 使用用户昵称（session.user.name包含后端返回的nickname，大小写敏感）
       senderName = session.user.name;
     }
-    // 接收方名称：从后端获取（Agent 或用户）
+    // ✅ 优化：接收方名称必须从后端获取准确的显示名称，不使用ID作为后备
     // 注意：必须确保 targetId 是正确的 agent_id 或 member_id
     // 如果 isUserToUser 为 false，targetId 应该是 agent_id（如 "chat", "rag"）
     // 如果 isUserToUser 为 true，targetId 应该是 member_id（不包含 "user::" 前缀）
-    const receiverName = await getAgentOrUserName(targetId, isUserToUser);
+    let receiverName: string | null = null;
+    try {
+      receiverName = await getAgentOrUserName(targetId, isUserToUser);
+    } catch (error) {
+      // 如果获取失败，记录错误但不阻塞消息发送
+      console.error("[chat/route] Failed to get receiver name:", error);
+    }
+    
+    // ✅ 关键修复：如果 receiverName 为空或等于 targetId（说明是ID），必须重新获取
+    // 最佳实践：后端应该提供准确的服务，前端不应该使用ID作为显示名称
+    if (!receiverName || receiverName === targetId || receiverName.includes("@")) {
+      // 尝试从实体信息API获取（使用统一的API）
+      try {
+        const entityType = isUserToUser ? "user" : "agent";
+        const response = await fetch(
+          `${BACKEND_API_URL}/api/entity/summary?entity_type=${entityType}`,
+          {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(3000), // 3秒超时，避免阻塞
+          }
+        );
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (isUserToUser) {
+            const users = data.users || [];
+            const user = users.find((item: any) => {
+              const itemId = item.id || "";
+              const itemMemberId = itemId.replace(/^user::/, "");
+              return itemId === `user::${targetId}` || 
+                     itemId === targetId || 
+                     itemMemberId === targetId;
+            });
+            receiverName = user?.display_name || user?.nickname || null;
+          } else {
+            const agents = data.agents || [];
+            const agent = agents.find((item: any) => item.id === targetId);
+            receiverName = agent?.display_name || null;
+          }
+        }
+      } catch (error) {
+        // 如果仍然失败，记录错误但不阻塞
+        console.error("[chat/route] Failed to get receiver name from entity API:", error);
+      }
+    }
+    
+    // ✅ 最佳实践：如果仍然无法获取显示名称，使用友好的后备值而不是ID
+    // 这样前端渲染时不会显示ID，而是显示友好的占位符
+    if (!receiverName || receiverName === targetId || receiverName.includes("@")) {
+      receiverName = isUserToUser ? "用户" : "智能体";
+    }
     
     // 调试日志（仅在开发环境）
     if (process.env.NODE_ENV === "development") {
@@ -306,22 +361,21 @@ export async function POST(request: Request) {
     }
     
     // 构建用户消息的metadata（固化名称和头像）
+    // ✅ 最佳实践：确保metadata中的名称始终是显示名称，而不是ID
     const userMessageMetadata: Record<string, any> = {
       createdAt: new Date().toISOString(),
       senderId: backendMemberId,
-      senderName: senderName, // 固化发送方名称
+      senderName: senderName, // 固化发送方名称（显示名称）
       communicationType: isUserToUser ? "user_user" : "user_agent",
     };
     
     if (isUserToUser) {
       userMessageMetadata.receiverId = targetId;
-      userMessageMetadata.receiverName = receiverName || targetId; // 固化接收方名称
+      userMessageMetadata.receiverName = receiverName; // 固化接收方名称（显示名称，不是ID）
     } else {
-      userMessageMetadata.receiverId = targetId; // Agent ID
-      userMessageMetadata.agentUsed = targetId; // Agent ID（用于显示）
-      // 如果 receiverName 为空或等于 targetId，说明查找失败，使用 targetId 作为后备
-      // 但这种情况不应该发生，因为 getAgentOrUserName 会返回 targetId 作为后备
-      userMessageMetadata.receiverName = receiverName || targetId; // 固化 Agent 名称
+      userMessageMetadata.receiverId = targetId; // Agent ID（用于路由）
+      userMessageMetadata.agentUsed = targetId; // Agent ID（用于路由）
+      userMessageMetadata.receiverName = receiverName; // Agent 显示名称（不是ID）
     }
     
     // 保存用户消息到数据库

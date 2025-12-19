@@ -387,10 +387,12 @@ export function generateLightweightTitle(
  *    - 适用于已持久化的消息和包含结构化 parts 的消息
  *    - 注意：在流式渲染过程中，parts 可能只有部分内容（如 "##"），因此不作为首选
  * 
- * @param message - ChatMessage 或 UIMessage 对象
+ * @param message - ChatMessage、UIMessage 或具有 parts 字段的对象
  * @returns 提取的文本内容，如果都没有则返回空字符串
  */
-export function getTextFromMessage(message: ChatMessage | UIMessage): string {
+export function getTextFromMessage(
+  message: ChatMessage | UIMessage | { parts?: Array<{ type: string; text?: string }>; content?: unknown }
+): string {
   // ✅ 智能提取策略：优先使用更完整的数据源
   // 1. 优先从 parts 提取（如果 parts 有完整内容）
   // 2. 回退到 content（AI SDK 标准字段）

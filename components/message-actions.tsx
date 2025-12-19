@@ -9,6 +9,7 @@ import type { ChatMessage } from "@/lib/types";
 import { cn, generateUUID, formatMessageTimestamp, getTextFromMessage } from "@/lib/utils";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useChatModels } from "@/lib/ai/models-client";
+import { EntityFinder, EntityResolver } from "@/lib/entity-utils";
 import { Action, Actions } from "./elements/actions";
 import { CopyIcon, PencilEditIcon, ThumbDownIcon, ThumbUpIcon, ShareIcon, TrashIcon, StarIcon, StarFilledIcon, MoreIcon } from "./icons";
 import useSWR from "swr";
@@ -81,15 +82,24 @@ export function PureMessageActions({
     }
   }, [showMoreActionsRight]);
   
-  // 获取用户列表（用于分享）
+  // ✅ 统一使用 EntityFinder 获取用户列表，确保显示名称一致
   const { models: chatModels } = useChatModels(isLoggedIn, 0);
-  const availableUsers = chatModels.filter((model) => {
-    if (model.type !== "user") return false;
+  const availableUsers = useMemo(() => {
     const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
-    if (!currentUserId) return false;
-    const modelMemberId = model.id.replace(/^user::/, "");
-    return model.id !== `user::${currentUserId}` && modelMemberId !== currentUserId;
-  });
+    if (!currentUserId) return [];
+    
+    return chatModels
+      .filter((model) => {
+        if (model.type !== "user") return false;
+        const modelMemberId = model.id.replace(/^user::/, "");
+        return model.id !== `user::${currentUserId}` && modelMemberId !== currentUserId;
+      })
+      .map((model) => ({
+        ...model,
+        // ✅ 确保使用统一的显示名称（从 chatModels 中获取，已确保是名称而不是ID）
+        name: EntityFinder.findDisplayName(chatModels, model.id, "user", model.name),
+      }));
+  }, [chatModels, session]);
 
   // 检查消息是否已收藏
   const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
@@ -356,16 +366,16 @@ export function PureMessageActions({
     }
 
     // 如果未收藏，则添加收藏
-    // 获取完整的原始消息信息
-    const metadata = message.metadata || {};
-    let senderName: string;
-    if (message.role === "user") {
-      // 用户消息：使用metadata中的senderName或从session获取
-      senderName = (metadata as any).senderName || session?.user?.email?.split("@")[0] || "用户";
-    } else {
-      // Assistant消息：优先使用metadata中的senderName
-      senderName = (metadata as any).senderName || (metadata as any).agentUsed || "智能体";
-    }
+    // ✅ 使用统一的 EntityResolver 解析发送者信息
+    // 处理 system 角色（视为 assistant）
+    const messageRole = message.role === "system" ? "assistant" : message.role;
+    const senderInfo = EntityResolver.resolveSender(
+      chatModels,
+      message.metadata,
+      messageRole === "user" ? "user" : "assistant",
+      session
+    );
+    const senderName = senderInfo.name;
 
     // 提取文件附件信息（用于保存到后端完整信息）
     const fileAttachments = message.parts

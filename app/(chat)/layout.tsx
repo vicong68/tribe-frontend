@@ -13,6 +13,7 @@ import { CollectionFilterProvider } from "@/components/collection-filter-provide
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { auth } from "../(auth)/auth";
 import { RightSidebarProvider } from "@/components/right-sidebar-provider";
+import { AgentsPreloader } from "@/lib/ai/models-preloader";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -25,6 +26,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <WebSocketMessageProvider>
           <SessionTimeoutProvider>
             <CollectionFilterProvider>
+              {/* ✅ 性能优化：在页面加载时预加载智能体列表 */}
+              <AgentsPreloader />
               <Suspense fallback={<div className="flex h-dvh" />}>
                 <SidebarWrapper>{children}</SidebarWrapper>
               </Suspense>

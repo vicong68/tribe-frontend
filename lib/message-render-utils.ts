@@ -8,6 +8,7 @@ import type { ChatMessage } from "@/lib/types";
 import type { Session } from "next-auth";
 import type { ChatModel } from "./ai/models";
 import { isAgentMessage, isRemoteUserMessage } from "./avatar-utils";
+import { EntityFinder, EntityId, EntityResolver } from "./entity-utils";
 
 // 记录每条消息首轮解析得到的 agent 渲染信息，避免后续因前端状态变化（如切换收信方）
 // 导致已存在消息的名称/头像被重新兜底为新的 selectedModelId。
@@ -16,11 +17,13 @@ const agentRenderCache = new Map<
   {
     agentId?: string;
     senderName?: string;
+    receiverName?: string; // ✅ 新增：缓存接收者名称（确保刷新后仍显示名称而不是ID）
   }
 >();
 
 /**
- * 从 chatModels 中查找 Agent 或用户的显示名称
+ * 从 chatModels 中查找 Agent 或用户的显示名称（向后兼容）
+ * @deprecated 使用 EntityFinder.findDisplayName 代替
  */
 type ModelLookup = Record<string, { name?: string }>;
 
@@ -31,21 +34,13 @@ function findDisplayName(
   fallback: string | undefined,
   modelLookup?: ModelLookup
 ): string {
-  if (!id) {
-    return fallback || "未知";
+  // 优先使用 modelLookup（向后兼容）
+  if (id && modelLookup?.[id]?.name) {
+    return modelLookup[id].name;
   }
   
-  const fromLookup = modelLookup?.[id]?.name;
-  if (fromLookup) {
-    return fromLookup;
-  }
-  
-  if (chatModels.length === 0) {
-    return fallback || id || "未知";
-  }
-  
-  const found = chatModels.find((m) => m.type === type && m.id === id);
-  return found?.name || fallback || id;
+  // 使用统一的 EntityFinder
+  return EntityFinder.findDisplayName(chatModels, id, type, fallback);
 }
 
 /**
@@ -161,7 +156,7 @@ export function getMessageRenderInfo(
     
     // 确定名称：优先metadata，其次缓存，最后查表
     const nameFromModels = agentId 
-      ? findDisplayName(chatModels, agentId, "agent", agentId || "智能体", modelLookup)
+      ? EntityFinder.findDisplayName(chatModels, agentId, "agent", agentId || "智能体")
       : "智能体";
     let resolvedSenderName =
       meta.senderName ||
@@ -200,7 +195,7 @@ export function getMessageRenderInfo(
     
     // 确定名称：优先metadata，其次缓存，最后查表
     const nameFromModels = senderId
-      ? findDisplayName(chatModels, senderId, "user", senderId, modelLookup) ||
+      ? EntityFinder.findDisplayName(chatModels, senderId, "user", senderId) ||
         (chatModels.find((m) => m.type === "user" && m.name === meta.senderName)?.name) ||
         "用户"
       : "用户";
@@ -229,7 +224,7 @@ export function getMessageRenderInfo(
     senderId = agentId;
     
     const nameFromModels = agentId
-      ? findDisplayName(chatModels, agentId, "agent", agentId || "智能体", modelLookup)
+      ? EntityFinder.findDisplayName(chatModels, agentId, "agent", agentId || "智能体")
       : "智能体";
     senderName = meta.senderName ||
       cached?.senderName ||
@@ -245,25 +240,100 @@ export function getMessageRenderInfo(
   }
   
   // 获取接收者名称（仅用户消息）
+  // ✅ 最佳实践：后端已确保metadata中的receiverName是显示名称，前端主要完成渲染
+  // 保留容错逻辑：如果metadata中的名称是ID，则从chatModels查找真实名称
   let receiverName: string | undefined;
   if (isLocalUser) {
-    receiverName = meta.receiverName;
     const isSharedMessage = Boolean((meta as any)?.isSharedMessage);
+    const receiverId = meta.receiverId as string | undefined;
     
-    // ✅ 用户-用户直发：从 chatModels 查找用户显示名称（确保使用名称而不是ID）
-    if (communicationType === "user_user" && !receiverName) {
-      const receiverId = meta.receiverId as string | undefined;
-      if (receiverId) {
-        // 确保 receiverId 格式为 user::member_id
-        const normalizedReceiverId = receiverId.startsWith("user::") ? receiverId : `user::${receiverId}`;
-        // 从 chatModels 查找用户显示名称
-        receiverName = findDisplayName(chatModels, normalizedReceiverId, "user", receiverId.replace(/^user::/, ""), modelLookup);
+    // ✅ 优化：使用缓存机制，确保刷新后仍显示名称而不是ID
+    const cached = agentRenderCache.get(message.id);
+    
+    // 优先使用缓存中的 receiverName（如果存在且有效）
+    if (cached?.receiverName) {
+      receiverName = cached.receiverName;
+    } else {
+      // ✅ 最佳实践：优先使用metadata中的receiverName（后端已确保是显示名称）
+      receiverName = meta.receiverName;
+      
+      // ✅ 容错：检查metadata中的名称是否是ID（向后兼容旧数据）
+      // 如果名称看起来像ID，则从chatModels查找真实名称
+      if (receiverName && receiverId) {
+        const isNameAnId = 
+          receiverName.includes("@") || 
+          receiverName === receiverId ||
+          receiverName === EntityId.extractMemberId(receiverId) ||
+          receiverName === EntityId.normalizeUserId(receiverId) ||
+          receiverName.startsWith("user::");
+        
+        if (isNameAnId) {
+          // 从 chatModels 查找用户/Agent 显示名称
+          const entityType: "user" | "agent" = EntityId.isUserId(receiverId) ? "user" : "agent";
+          const fallback = entityType === "user" 
+            ? (EntityId.extractMemberId(receiverId) || receiverId)
+            : receiverId;
+          receiverName = EntityFinder.findDisplayName(chatModels, receiverId, entityType, fallback);
+          
+          // ✅ 关键修复：如果从 chatModels 查找失败（返回了ID或fallback），
+          // 说明 chatModels 中没有该用户信息，需要从后端API获取
+          // 但这里不能直接调用API（在渲染函数中），所以先使用fallback，后续通过useUsers加载
+          // 如果 receiverName 仍然是ID格式，说明需要等待用户列表加载完成
+          if (receiverName === fallback || receiverName === receiverId || receiverName.includes("@")) {
+            // 暂时保留，等待用户列表加载后重新渲染
+            // 注意：这里不设置为undefined，避免显示为空
+          }
+        }
       }
-    }
-    
-    // 用户-Agent 消息：从 chatModels 查找 Agent 显示名称
-    if (!receiverName && !isSharedMessage && selectedModelId && !selectedModelId.startsWith("user::")) {
-      receiverName = findDisplayName(chatModels, selectedModelId, "agent", selectedModelId, modelLookup);
+      
+      // 如果仍然没有名称，使用 EntityResolver 作为后备
+      if (!receiverName && receiverId) {
+        const receiverInfo = EntityResolver.resolveReceiver(chatModels, meta, selectedModelId);
+        if (receiverInfo) {
+          receiverName = receiverInfo.name;
+          // 再次检查是否是ID
+          if (receiverName && (receiverName.includes("@") || receiverName === receiverId)) {
+            const entityType: "user" | "agent" = EntityId.isUserId(receiverId) ? "user" : "agent";
+            const fallback = entityType === "user" 
+              ? (EntityId.extractMemberId(receiverId) || receiverId)
+              : receiverId;
+            receiverName = EntityFinder.findDisplayName(chatModels, receiverId, entityType, fallback);
+          }
+        }
+      }
+      
+      // ✅ 关键修复：如果 receiverName 仍然是ID格式且是用户ID，说明chatModels中没有该用户
+      // 此时应该显示友好的占位符，而不是ID
+      if (receiverName && receiverId && EntityId.isUserId(receiverId)) {
+        const isStillId = receiverName.includes("@") || receiverName === receiverId || receiverName.startsWith("user::");
+        if (isStillId && chatModels.length > 0) {
+          // 如果chatModels已加载但找不到用户，说明该用户不在好友列表中
+          // 但metadata中应该有receiverName，如果metadata中的receiverName是ID，说明后端保存时出错了
+          // 这里先使用"用户"作为后备，避免显示ID
+          // 注意：只有在确认chatModels已加载且找不到用户时才使用后备
+          const hasUsersInModels = chatModels.some(m => m.type === "user");
+          if (hasUsersInModels) {
+            // chatModels中有用户，但找不到对应的用户，说明该用户不在好友列表中
+            // 使用"用户"作为后备，而不是ID
+            receiverName = "用户";
+          }
+        }
+      }
+      
+      // ✅ 缓存 receiverName（确保刷新后仍显示名称而不是ID）
+      if (receiverName) {
+        if (!cached) {
+          agentRenderCache.set(message.id, {
+            receiverName,
+          });
+        } else {
+          // 更新现有缓存
+          agentRenderCache.set(message.id, {
+            ...cached,
+            receiverName,
+          });
+        }
+      }
     }
   }
   
@@ -310,7 +380,7 @@ export function getThinkingMessageRenderInfo(
 ): Pick<MessageRenderInfo, "senderName" | "avatarSeed" | "agentId"> {
   // 从 chatModels 查找 Agent 显示名称
   const agentId = selectedModelId;
-  const senderName = findDisplayName(chatModels, agentId, "agent", agentId || "智能体", modelLookup);
+  const senderName = EntityFinder.findDisplayName(chatModels, agentId, "agent", agentId || "智能体");
   
   // 头像种子值：使用 agent_id，确保与流式回复消息一致
   const avatarSeed = agentId || senderName;

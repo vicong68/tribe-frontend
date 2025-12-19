@@ -19,6 +19,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { EntityFinder } from "@/lib/entity-utils";
+import type { ChatModel } from "@/lib/ai/models";
 
 interface CollectionItem {
   id: string;
@@ -38,6 +40,34 @@ export function CollectionsToolbar() {
   const { data: session } = useSession();
   const isLoggedIn = session?.user?.type === "regular";
   const userId = isLoggedIn && session?.user ? getBackendMemberId(session.user) : null;
+  
+  // ✅ 性能优化：延迟加载用户列表，只在需要时获取（保存文件时）
+  // 使用 useSWR 的全局缓存，避免重复请求
+  const { data: chatModels } = useSWR<ChatModel[]>(
+    isLoggedIn ? `models_true_${userId || 'none'}` : null,
+    async (key: string) => {
+      const [, , actualUserId] = key.split("_");
+      const includeUsers = true;
+      const userIdParam = actualUserId === "none" ? undefined : actualUserId;
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000"}/api/agents?format=simple${userIdParam ? `&user_id=${userIdParam}` : ""}`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      const items = data.agents || [];
+      return items
+        .filter((item: any) => item.type === "user")
+        .map((item: any) => ({
+          id: item.id,
+          name: item.nickname || item.display_name,
+          description: "用户",
+          type: "user" as const,
+          isOnline: typeof item.is_online === "boolean" ? item.is_online : undefined,
+        }));
+    },
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 5000,
+    }
+  );
   
   // 获取收藏列表
   const { data: collections } = useSWR<CollectionItem[]>(
@@ -131,8 +161,9 @@ export function CollectionsToolbar() {
     }
 
     try {
+      // ✅ 按时间正序排序（最旧的在前），与显示顺序保持一致
       const sorted = [...collections].sort((a, b) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
 
       const now = new Date();
@@ -146,7 +177,12 @@ export function CollectionsToolbar() {
 
       sorted.forEach((item, index) => {
         const date = formatDate(new Date(item.created_at), "yyyy-MM-dd HH:mm:ss", { locale: zhCN });
-        const sender = item.sender_name || (item.message_role === "user" ? "用户" : "智能体");
+        // ✅ 统一使用 EntityFinder.getEntityDisplayName 确保显示名称而不是ID
+        const sender = EntityFinder.getEntityDisplayName(
+          chatModels || [],
+          item.sender_name,
+          item.message_role === "user" ? "用户" : "智能体"
+        );
         const roleLabel = item.message_role === "user" ? (fileFormat === "md" ? "👤" : "[用户]") : (fileFormat === "md" ? "🤖" : "[智能体]");
         const fullContent = item.message_content || ""; // 使用后端返回的完整内容
         const formattedContent = formatContentForFile(fullContent, fileFormat);
@@ -295,13 +331,13 @@ export function CollectionsList() {
     return mainParts.join('\n\n').trim();
   }, []);
 
-  // 按时间倒序排序（最新的在前）
+  // ✅ 按时间正序排序（最旧的在前，从上到下按从旧到新排列）
   const sortedCollections = useMemo(() => {
     if (!collections) return [];
     return [...collections].sort((a, b) => {
       const timeA = new Date(a.created_at).getTime();
       const timeB = new Date(b.created_at).getTime();
-      return timeB - timeA;
+      return timeA - timeB; // 正序：最旧的在前
     });
   }, [collections]);
 

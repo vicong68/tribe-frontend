@@ -13,6 +13,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { PlusIcon, TrashIcon } from "./icons";
+import { useSWRConfig } from "swr";
 import { useChatModels, clearModelsCache } from "@/lib/ai/models-client";
 import { getBackendMemberId } from "@/lib/user-utils";
 import { useUserStatus } from "@/hooks/use-user-status";
@@ -36,6 +37,7 @@ interface SearchResult {
  */
 export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
   const { data: session } = useSession();
+  const { mutate: globalMutate } = useSWRConfig();
   const isLoggedIn = session?.user?.type === "regular";
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -137,7 +139,15 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
           }
 
           toast.success(`已添加智能体 ${result.name}`);
-          clearModelsCache(true);
+          // ✅ 性能优化：使用 SWR 的 mutate 清除缓存
+          const cacheKeys = clearModelsCache(true);
+          cacheKeys.forEach((key) => {
+            if (key.endsWith("*")) {
+              globalMutate((k) => typeof k === "string" && k.startsWith(key.slice(0, -1)));
+            } else {
+              globalMutate(key);
+            }
+          });
           onRefresh?.();
           setOpen(false);
           setSearchQuery("");
@@ -219,7 +229,15 @@ export function FriendManager({ onRefresh }: { onRefresh?: () => void }) {
         }
 
         toast.success(`已删除好友 ${friendName}`);
-        clearModelsCache(true);
+        // ✅ 性能优化：使用 SWR 的 mutate 清除缓存
+        const cacheKeys = clearModelsCache(true);
+        cacheKeys.forEach((key) => {
+          if (key.endsWith("*")) {
+            globalMutate((k) => typeof k === "string" && k.startsWith(key.slice(0, -1)));
+          } else {
+            globalMutate(key);
+          }
+        });
         onRefresh?.();
       } catch (error) {
         console.error("删除好友失败:", error);
