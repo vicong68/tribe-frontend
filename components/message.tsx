@@ -189,12 +189,43 @@ const PurePreviewMessage = ({
     !!(isAgent && !isRemoteUser)
   );
 
-  // 在线状态指示（仅用户头像展示）
+  // ✅ 统一在线状态获取：与好友列表和下拉列表保持一致
+  // 好友列表和下拉列表的逻辑：从 chatModels 获取用户，然后使用 getCachedStatus 更新 isOnline
+  // 这里也使用相同的逻辑：优先从 chatModels 中查找用户，然后使用 getCachedStatus 获取在线状态
   const userOnlineStatus = useMemo(() => {
     if (isAgent) return undefined;
     if (!senderIdForStatus) return undefined;
+    
+    // 从 chatModels 中查找用户（与好友列表和下拉列表保持一致）
+    const userModel = chatModels.find((model) => {
+      if (model.type !== "user") return false;
+      const modelId = model.id.replace(/^user::/, "");
+      const modelMemberId = senderIdForStatus.replace(/^user::/, "");
+      return model.id === senderIdForStatus || 
+             model.id === `user::${senderIdForStatus}` ||
+             modelId === senderIdForStatus ||
+             modelId === modelMemberId ||
+             model.id === `user::${modelMemberId}`;
+    });
+    
+    // ✅ 关键修复：与好友列表和下拉列表保持一致，使用 getCachedStatus 获取在线状态
+    // 好友列表和下拉列表的逻辑是：从 chatModels 获取用户，然后使用 getCachedStatus 更新 isOnline
+    // 这里也使用相同的逻辑：如果找到用户，使用 getCachedStatus 获取在线状态（而不是直接使用 model.isOnline）
+    if (userModel) {
+      // 使用 getCachedStatus 获取在线状态（与好友列表和下拉列表保持一致）
+      const cachedStatus = getCachedStatus(userModel.id);
+      if (cachedStatus !== undefined) {
+        return cachedStatus;
+      }
+      // 如果 getCachedStatus 返回 undefined，尝试使用 model.isOnline（可能来自后端API）
+      if (typeof userModel.isOnline === "boolean") {
+        return userModel.isOnline;
+      }
+    }
+    
+    // 后备方案：如果 chatModels 中没有找到，直接使用 getCachedStatus
     return getCachedStatus(senderIdForStatus) ?? getCachedStatus(`user::${senderIdForStatus}`);
-  }, [getCachedStatus, senderIdForStatus, isAgent, statusVersion]);
+  }, [chatModels, getCachedStatus, senderIdForStatus, isAgent, statusVersion]);
   
   // 是否需要显示等待效果（仅agent需要）
   const showThinking = !!(isAgent && isLoading);

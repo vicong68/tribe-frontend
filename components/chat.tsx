@@ -782,6 +782,139 @@ export function Chat({
   // 直接使用原始 sendMessage，固化逻辑已在 prepareSendMessagesRequest 中处理
   const sendMessage = originalSendMessage;
 
+  // ✅ 刷新后恢复机制：如果 receiverName 是"用户"，从后端重新获取真实的用户名称
+  useEffect(() => {
+    // 只在消息加载完成后执行一次（避免重复请求）
+    if (messages.length === 0) return;
+    
+    // 查找所有 receiverName 为"用户"的用户-用户消息
+    const messagesToFix = messages.filter((msg) => {
+      const meta = msg.metadata as any;
+      return (
+        msg.role === "user" &&
+        meta?.communicationType === "user_user" &&
+        meta?.receiverName === "用户" &&
+        meta?.receiverId &&
+        !meta?.receiverId.includes("::") // 确保是用户ID，不是Agent ID
+      );
+    });
+
+    if (messagesToFix.length === 0) return;
+
+    // 批量获取用户信息并更新
+    (async () => {
+      const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000";
+      
+      try {
+        // 收集所有需要查询的 receiverId
+        const receiverIds = new Set<string>();
+        messagesToFix.forEach((msg) => {
+          const meta = msg.metadata as any;
+          if (meta?.receiverId) {
+            receiverIds.add(meta.receiverId);
+          }
+        });
+
+        // 从后端API获取用户信息
+        const response = await fetch(
+          `${BACKEND_API_URL}/api/entity/summary?entity_type=user`,
+          {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const users = data.users || [];
+
+        // 构建 receiverId -> displayName 映射
+        const receiverNameMap = new Map<string, string>();
+        receiverIds.forEach((receiverId) => {
+          const user = users.find((item: any) => {
+            const itemId = item.id || "";
+            const itemMemberId = itemId.replace(/^user::/, "");
+            return (
+              itemId === `user::${receiverId}` ||
+              itemId === receiverId ||
+              itemMemberId === receiverId
+            );
+          });
+          if (user?.display_name || user?.nickname) {
+            receiverNameMap.set(receiverId, user.display_name || user.nickname);
+          }
+        });
+
+        // 更新消息的 metadata
+        if (receiverNameMap.size > 0) {
+          for (const msg of messagesToFix) {
+            const meta = msg.metadata as any;
+            const receiverId = meta?.receiverId;
+            const correctName = receiverNameMap.get(receiverId);
+            
+            if (correctName && correctName !== "用户") {
+              try {
+                // 通过 API route 更新数据库
+                const response = await fetch(`/api/message/${msg.id}`, {
+                  method: "PATCH",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    metadata: {
+                      ...meta,
+                      receiverName: correctName,
+                    },
+                  }),
+                });
+
+                if (response.ok) {
+                  // 更新内存中的消息
+                  setMessages((prev) => {
+                    const index = prev.findIndex((m) => m.id === msg.id);
+                    if (index >= 0) {
+                      const updated = [...prev];
+                      updated[index] = {
+                        ...prev[index],
+                        metadata: {
+                          ...prev[index].metadata,
+                          receiverName: correctName,
+                        },
+                      };
+                      return updated;
+                    }
+                    return prev;
+                  });
+
+                  if (process.env.NODE_ENV === "development") {
+                    console.log(
+                      `[Chat] ✅ 已修复消息 receiverName: ${msg.id.slice(0, 8)}... -> ${correctName}`
+                    );
+                  }
+                } else {
+                  console.error(
+                    `[Chat] ⚠️  修复消息 receiverName 失败: ${msg.id.slice(0, 8)}...`,
+                    await response.text()
+                  );
+                }
+              } catch (error) {
+                console.error(
+                  `[Chat] ⚠️  修复消息 receiverName 失败: ${msg.id.slice(0, 8)}...`,
+                  error
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV === "development") {
+          console.error("[Chat] ⚠️  刷新后恢复 receiverName 失败:", error);
+        }
+      }
+    })();
+  }, [messages, setMessages]);
+
   useEffect(() => {
     const isSwitching = conversationManager.detectAgentSwitch(currentModelId);
     if (isSwitching && status === "streaming") {

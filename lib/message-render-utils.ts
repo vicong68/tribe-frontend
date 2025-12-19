@@ -9,6 +9,7 @@ import type { Session } from "next-auth";
 import type { ChatModel } from "./ai/models";
 import { isAgentMessage, isRemoteUserMessage } from "./avatar-utils";
 import { EntityFinder, EntityId, EntityResolver } from "./entity-utils";
+import { getBackendMemberId } from "./user-utils";
 
 // 记录每条消息首轮解析得到的 agent 渲染信息，避免后续因前端状态变化（如切换收信方）
 // 导致已存在消息的名称/头像被重新兜底为新的 selectedModelId。
@@ -130,6 +131,9 @@ export function getMessageRenderInfo(
   let agentId: string | undefined;
   
   if (isLocalUser) {
+    // ✅ 关键修复：分享消息必须使用当前登录用户的信息，确保头像生成一致
+    const isSharedMessage = Boolean((meta as any)?.isSharedMessage);
+    
     // 本地用户：优先使用当前 session 中的用户昵称，其次使用 metadata 中已固化的名称（大小写敏感）
     if (session?.user?.type === "guest") {
       senderName = meta.senderName || "访客";
@@ -137,7 +141,17 @@ export function getMessageRenderInfo(
       // 优先级：session.user.name（当前用户昵称，大小写敏感） > meta.senderName（消息创建时固化的名称，大小写敏感）
       senderName = session?.user?.name || meta.senderName || "我";
     }
-    senderId = meta.senderId || session?.user?.memberId || undefined;
+    
+    // ✅ 关键修复：分享消息必须使用当前登录用户的信息，确保与本地用户默认消息的头像生成一致
+    // 使用 getBackendMemberId 确保与 message-actions.tsx 中的逻辑完全一致
+    if (isSharedMessage) {
+      // 分享消息：强制使用当前登录用户的 memberId（使用 getBackendMemberId 确保格式一致）
+      // 与 message-actions.tsx 中创建分享消息时使用的 currentUserId 保持一致
+      senderId = (session?.user ? getBackendMemberId(session.user) : null) || meta.senderId || undefined;
+    } else {
+      // 普通本地用户消息：使用 metadata 中的 senderId 或 session 的 memberId
+      senderId = meta.senderId || (session?.user ? getBackendMemberId(session.user) : null) || undefined;
+    }
   } else if (isAgent) {
     // Agent 消息：优先使用后端固化的 agentUsed/senderName
     // 统一缓存机制：首次解析时写入缓存，后续直接使用缓存，不受selectedModelId变化影响
@@ -302,23 +316,10 @@ export function getMessageRenderInfo(
         }
       }
       
-      // ✅ 关键修复：如果 receiverName 仍然是ID格式且是用户ID，说明chatModels中没有该用户
-      // 此时应该显示友好的占位符，而不是ID
-      if (receiverName && receiverId && EntityId.isUserId(receiverId)) {
-        const isStillId = receiverName.includes("@") || receiverName === receiverId || receiverName.startsWith("user::");
-        if (isStillId && chatModels.length > 0) {
-          // 如果chatModels已加载但找不到用户，说明该用户不在好友列表中
-          // 但metadata中应该有receiverName，如果metadata中的receiverName是ID，说明后端保存时出错了
-          // 这里先使用"用户"作为后备，避免显示ID
-          // 注意：只有在确认chatModels已加载且找不到用户时才使用后备
-          const hasUsersInModels = chatModels.some(m => m.type === "user");
-          if (hasUsersInModels) {
-            // chatModels中有用户，但找不到对应的用户，说明该用户不在好友列表中
-            // 使用"用户"作为后备，而不是ID
-            receiverName = "用户";
-          }
-        }
-      }
+      // ✅ 根本原因修复：如果 receiverName 是"用户"（说明是历史数据中的占位符），
+      // 不在这里回退，而是由刷新后恢复机制处理（chat.tsx 中的 useEffect）
+      // 如果 receiverName 仍然是ID格式，说明需要等待用户列表加载，暂时保留ID
+      // 注意：不再在这里设置"用户"作为后备，避免覆盖刷新后恢复机制
       
       // ✅ 缓存 receiverName（确保刷新后仍显示名称而不是ID）
       if (receiverName) {
@@ -339,14 +340,25 @@ export function getMessageRenderInfo(
   
   // 获取头像种子值（用于生成稳定的头像）
   // 统一使用缓存机制：优先使用已缓存的ID，避免受selectedModelId变化影响
+  // ✅ 关键修复：确保远端用户的 avatarSeed 使用 user::member_id 格式，与好友列表和下拉列表保持一致
   const cached = agentRenderCache.get(message.id);
   let avatarSeed: string;
   if (isAgent) {
     // Agent 消息：优先使用缓存的agentId，确保稳定
     avatarSeed = cached?.agentId || agentId || senderId || "default";
   } else if (isRemoteUser) {
-    // 远端用户消息：优先使用缓存的senderId
-    avatarSeed = cached?.agentId || senderId || senderName || "default";
+    // ✅ 远端用户消息：确保使用 user::member_id 格式，与好友列表和下拉列表保持一致
+    // 好友列表和下拉列表使用 model.id（格式：user::member_id）
+    // 这里也需要使用相同的格式，确保头像生成一致
+    const rawSenderId = cached?.agentId || senderId;
+    if (rawSenderId) {
+      // 如果 senderId 存在，标准化为 user::member_id 格式
+      // 注意：senderId 应该是 member_id（如 vicong@qq.com），不是显示名称
+      avatarSeed = EntityId.normalizeUserId(rawSenderId) || rawSenderId;
+    } else {
+      // 如果 senderId 不存在，使用 senderName 作为后备（不添加 user:: 前缀，因为可能是显示名称）
+      avatarSeed = senderName || "default";
+    }
   } else {
     // 本地用户消息：使用 senderId 或 senderName
     avatarSeed = senderId || senderName || "default";

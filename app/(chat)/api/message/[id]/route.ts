@@ -1,56 +1,70 @@
 import { auth } from "@/app/(auth)/auth";
-import { deleteMessageById, getMessageById } from "@/lib/db/queries";
+import { updateMessageMetadata, deleteMessageById } from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
+import { NextRequest, NextResponse } from "next/server";
 
-export async function DELETE(
-  request: Request,
+/**
+ * 更新消息的 metadata
+ * 用于在收到后端返回的准确信息后更新消息元数据
+ */
+export async function PATCH(
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id: messageId } = await params;
-
-  if (!messageId) {
-    return new ChatSDKError("bad_request:api", "Message ID is required").toResponse();
-  }
-
-  const session = await auth();
-
-  if (!session?.user) {
-    return new ChatSDKError("unauthorized:message", "User not authenticated").toResponse();
-  }
-
   try {
-    // 检查消息是否存在
-    const messages = await getMessageById({ id: messageId });
-    
-    if (!messages || messages.length === 0) {
-      return new ChatSDKError("not_found:message", "Message not found").toResponse();
+    const session = await auth();
+    if (!session?.user) {
+      return new ChatSDKError("unauthorized:chat").toResponse();
     }
 
-    // 注意：这里不检查消息的所有者，因为消息属于聊天，而聊天属于用户
-    // 如果需要更严格的权限控制，可以检查消息所属的聊天是否属于当前用户
-    // 但为了简化，我们允许删除任何消息（前端可以控制显示）
+    const { id } = await params;
+    const body = await request.json();
+    const { metadata } = body;
 
-    // 删除消息
-    const deletedMessage = await deleteMessageById({ id: messageId });
-
-    if (!deletedMessage) {
-      return new ChatSDKError("not_found:message", "Message not found").toResponse();
+    if (!metadata || typeof metadata !== "object") {
+      return new ChatSDKError("bad_request:api", "metadata is required").toResponse();
     }
 
-    return Response.json({ 
-      success: true, 
-      message: "Message deleted successfully",
-      id: messageId 
+    await updateMessageMetadata({
+      messageId: id,
+      metadata,
     });
-  } catch (error) {
-    if (error instanceof ChatSDKError) {
-      return error.toResponse();
-    }
 
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[API] Failed to update message metadata:", error);
     return new ChatSDKError(
-      "offline:message",
-      error instanceof Error ? error.message : "Failed to delete message"
+      "bad_request:api",
+      error instanceof Error ? error.message : "Failed to update message metadata"
     ).toResponse();
   }
 }
 
+/**
+ * 删除消息（硬删除）
+ * 删除消息及其相关的投票记录
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return new ChatSDKError("unauthorized:chat").toResponse();
+    }
+
+    const { id } = await params;
+
+    // 硬删除消息（包括相关的投票记录）
+    await deleteMessageById({ id });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[API] Failed to delete message:", error);
+    return new ChatSDKError(
+      "bad_request:api",
+      error instanceof Error ? error.message : "Failed to delete message"
+    ).toResponse();
+  }
+}

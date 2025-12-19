@@ -433,6 +433,30 @@ export async function getMessagesByChatId({ id }: { id: string }) {
   }
 }
 
+/**
+ * 更新消息的 metadata
+ * 用于在收到后端返回的准确信息后更新消息元数据
+ */
+export async function updateMessageMetadata({
+  messageId,
+  metadata,
+}: {
+  messageId: string;
+  metadata: Record<string, any>;
+}) {
+  try {
+    return await db
+      .update(message)
+      .set({ metadata })
+      .where(eq(message.id, messageId));
+  } catch (error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      `Failed to update message metadata: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
 export async function voteMessage({
   chatId,
   messageId,

@@ -10,6 +10,7 @@ import {
   saveChat,
   saveMessages,
   updateChatLastContextById,
+  updateMessageMetadata,
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
@@ -291,61 +292,32 @@ export async function POST(request: Request) {
       // 使用用户昵称（session.user.name包含后端返回的nickname，大小写敏感）
       senderName = session.user.name;
     }
-    // ✅ 优化：接收方名称必须从后端获取准确的显示名称，不使用ID作为后备
-    // 注意：必须确保 targetId 是正确的 agent_id 或 member_id
-    // 如果 isUserToUser 为 false，targetId 应该是 agent_id（如 "chat", "rag"）
-    // 如果 isUserToUser 为 true，targetId 应该是 member_id（不包含 "user::" 前缀）
+    // ✅ 优先解决：前端发送消息时，必须成功获取 receiverName
+    // 方案：1) 从缓存获取 2) 调用API获取 3) 如果失败，后端会在入库前校验补全
     let receiverName: string | null = null;
-    try {
-      receiverName = await getAgentOrUserName(targetId, isUserToUser);
-    } catch (error) {
-      // 如果获取失败，记录错误但不阻塞消息发送
-      console.error("[chat/route] Failed to get receiver name:", error);
-    }
-    
-    // ✅ 关键修复：如果 receiverName 为空或等于 targetId（说明是ID），必须重新获取
-    // 最佳实践：后端应该提供准确的服务，前端不应该使用ID作为显示名称
-    if (!receiverName || receiverName === targetId || receiverName.includes("@")) {
-      // 尝试从实体信息API获取（使用统一的API）
+    if (isUserToUser) {
+      // 用户-用户消息：必须获取到有效的用户名称
       try {
-        const entityType = isUserToUser ? "user" : "agent";
-        const response = await fetch(
-          `${BACKEND_API_URL}/api/entity/summary?entity_type=${entityType}`,
-          {
-            method: "GET",
-            headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(3000), // 3秒超时，避免阻塞
-          }
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (isUserToUser) {
-            const users = data.users || [];
-            const user = users.find((item: any) => {
-              const itemId = item.id || "";
-              const itemMemberId = itemId.replace(/^user::/, "");
-              return itemId === `user::${targetId}` || 
-                     itemId === targetId || 
-                     itemMemberId === targetId;
-            });
-            receiverName = user?.display_name || user?.nickname || null;
-          } else {
-            const agents = data.agents || [];
-            const agent = agents.find((item: any) => item.id === targetId);
-            receiverName = agent?.display_name || null;
-          }
+        receiverName = await getAgentOrUserName(targetId, true);
+        // 验证：必须是有效的显示名称（不是ID格式）
+        if (receiverName && receiverName !== targetId && !receiverName.includes("@")) {
+          // 获取成功，使用该名称
+        } else {
+          // 获取到的是ID格式或无效，清空，等待后端补全
+          receiverName = null;
         }
       } catch (error) {
-        // 如果仍然失败，记录错误但不阻塞
-        console.error("[chat/route] Failed to get receiver name from entity API:", error);
+        // 获取失败，清空，等待后端补全
+        console.error("[chat/route] Failed to get receiver name:", error);
+        receiverName = null;
       }
-    }
-    
-    // ✅ 最佳实践：如果仍然无法获取显示名称，使用友好的后备值而不是ID
-    // 这样前端渲染时不会显示ID，而是显示友好的占位符
-    if (!receiverName || receiverName === targetId || receiverName.includes("@")) {
-      receiverName = isUserToUser ? "用户" : "智能体";
+    } else {
+      // Agent消息：可以设置，因为Agent名称相对稳定
+      try {
+        receiverName = await getAgentOrUserName(targetId, false);
+      } catch (error) {
+        console.error("[chat/route] Failed to get agent name:", error);
+      }
     }
     
     // 调试日志（仅在开发环境）
@@ -371,11 +343,15 @@ export async function POST(request: Request) {
     
     if (isUserToUser) {
       userMessageMetadata.receiverId = targetId;
-      userMessageMetadata.receiverName = receiverName; // 固化接收方名称（显示名称，不是ID）
+      // ✅ 优先解决：用户-用户消息，如果前端获取到有效的 receiverName 才设置
+      // 如果获取不到，不设置，等待后端返回后更新（确保数据库中的 receiver_name 不会是"用户"）
+      if (receiverName && receiverName !== targetId && !receiverName.includes("@")) {
+        userMessageMetadata.receiverName = receiverName;
+      }
     } else {
       userMessageMetadata.receiverId = targetId; // Agent ID（用于路由）
       userMessageMetadata.agentUsed = targetId; // Agent ID（用于路由）
-      userMessageMetadata.receiverName = receiverName; // Agent 显示名称（不是ID）
+      userMessageMetadata.receiverName = receiverName || targetId; // Agent 显示名称
     }
     
     // 保存用户消息到数据库
@@ -534,6 +510,31 @@ export async function POST(request: Request) {
 
         const result = await backendResponse.json();
         const aiResponse = result.ai_response || result.response || "";
+        
+        // ✅ 优先解决：使用后端返回的 receiver_name 更新消息 metadata
+        // 后端已确保返回的 receiver_name 是有效的用户昵称（不是"用户"，不是ID格式）
+        // 因此可以无条件更新
+        const backendReceiverName = result.receiver_name;
+        if (backendReceiverName) {
+          try {
+            const updatedMetadata = {
+              ...userMessageMetadata,
+              receiverName: backendReceiverName,
+            };
+            await updateMessageMetadata({
+              messageId: dbUserMessageId,
+              metadata: updatedMetadata,
+            });
+            if (process.env.NODE_ENV === "development") {
+              console.log("[chat/route] ✅ 已使用后端返回的 receiver_name 更新消息 metadata:", {
+                messageId: dbUserMessageId.slice(0, 8),
+                receiverName: backendReceiverName,
+              });
+            }
+          } catch (error) {
+            console.error("[chat/route] ⚠️  更新消息 metadata 失败:", error);
+          }
+        }
 
         // 用户-用户消息不需要AI回复，直接返回空响应
         // 消息已通过SSE实时推送，这里只需要返回成功状态

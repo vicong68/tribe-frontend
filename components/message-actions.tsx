@@ -82,10 +82,11 @@ export function PureMessageActions({
     }
   }, [showMoreActionsRight]);
   
-  // ✅ 统一使用 EntityFinder 获取用户列表，确保显示名称一致
-  const { models: chatModels } = useChatModels(isLoggedIn, 0);
+  // ✅ 修复分享功能：确保正确加载好友用户列表
+  // useChatModels 需要传入 userId 才能加载用户列表
+  const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
+  const { models: chatModels } = useChatModels(isLoggedIn, 0, currentUserId);
   const availableUsers = useMemo(() => {
-    const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
     if (!currentUserId) return [];
     
     return chatModels
@@ -99,10 +100,9 @@ export function PureMessageActions({
         // ✅ 确保使用统一的显示名称（从 chatModels 中获取，已确保是名称而不是ID）
         name: EntityFinder.findDisplayName(chatModels, model.id, "user", model.name),
       }));
-  }, [chatModels, session]);
+  }, [chatModels, currentUserId]);
 
   // 检查消息是否已收藏
-  const currentUserId = session?.user ? getBackendMemberId(session.user) : null;
   const { data: collectionStatus } = useSWR<{ is_collected: boolean; collection: any }>(
     isLoggedIn && currentUserId && message.id
       ? `/api/collections/check?message_id=${encodeURIComponent(message.id)}`
@@ -236,6 +236,7 @@ export function PureMessageActions({
       const displayMessageId = generateUUID();
       
       // 添加显示消息到对话区
+      // ✅ 关键修复：确保分享消息的 senderId 是当前登录用户，与本地用户默认消息保持一致
       setMessages((prevMessages) => {
         const displayMessage: ChatMessage = {
           id: displayMessageId,
@@ -247,13 +248,17 @@ export function PureMessageActions({
             },
           ],
           metadata: {
-            ...message.metadata,
-            ...({
-              isSharedMessage: true, // 标记为分享消息
-              sharedTo: targetUserId,
-              sharedToName: targetUserName,
-            } as any),
-          },
+            // ✅ 关键修复：分享消息应该使用当前登录用户的信息，而不是原消息的 metadata
+            // 只保留必要的字段，确保 senderId 和 senderName 是当前用户
+            senderId: currentUserId, // 使用当前登录用户的 memberId
+            senderName: session?.user?.name || "我", // 使用当前登录用户的名称
+            isSharedMessage: true, // 标记为分享消息
+            sharedTo: targetUserId,
+            sharedToName: targetUserName,
+            // 保留原消息的 communicationType 和 receiverId（如果需要）
+            communicationType: "user_user", // 分享消息是用户-用户消息
+            receiverId: targetUserId, // 接收者是目标用户
+          } as any,
         };
         return [...prevMessages, displayMessage];
       });
