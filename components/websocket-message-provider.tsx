@@ -31,12 +31,21 @@ const SSEMessageContext = createContext<SSEMessageContextValue | null>(null);
 export function SSEMessageProvider({ children }: { children: ReactNode }) {
   const { data: session, status: sessionStatus } = useSession();
   
-  // 优先使用 memberId（后端用户ID），然后尝试从 email 提取，最后使用 id
+  // ✅ 使用统一的用户ID获取函数，确保格式正确（memberId > email > id）
   // 只在 session 完全加载后才提取用户ID，避免无效连接
   const userId = sessionStatus === "authenticated" && session?.user
-    ? (session.user.memberId || 
-       (session.user.email ? session.user.email.split("@")[0] : null) || 
-       session.user.id || null)
+    ? (() => {
+        // 优先使用 memberId（后端用户ID，完整邮箱格式）
+        if (session.user.memberId) {
+          return session.user.memberId;
+        }
+        // 如果没有 memberId，使用完整的 email（后端 member_id 是完整邮箱格式）
+        if (session.user.email) {
+          return session.user.email;
+        }
+        // 最后使用 id
+        return session.user.id || null;
+      })()
     : null;
 
   const {

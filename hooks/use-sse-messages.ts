@@ -193,11 +193,44 @@ export function useSSEMessages(userId: string | null) {
           if (data.communication_type === "system_broadcast" && data.message_type === "user_status_update") {
             try {
               const statusData = JSON.parse(data.content);
+              
+              // ✅ 检测到超时注销：如果 reason 为 "timeout" 且是当前用户，自动注销
+              // 注意：member_id 可能是完整邮箱格式（如 "Vicong@qq.com"），需要精确匹配
+              const isCurrentUser = statusData.member_id === userId || 
+                                   (userId && statusData.member_id && 
+                                    (statusData.member_id.toLowerCase() === userId.toLowerCase() ||
+                                     userId.toLowerCase() === statusData.member_id.toLowerCase()));
+              
+              if (statusData.reason === "timeout" && isCurrentUser && !statusData.is_online) {
+                console.log("[SSE] ⚠️  检测到用户超时注销，执行自动注销", {
+                  member_id: statusData.member_id,
+                  userId,
+                });
+                
+                // 动态导入避免循环依赖
+                import("next-auth/react").then(({ signOut }) => {
+                  signOut({
+                    redirectTo: "/",
+                  });
+                });
+                
+                // 显示提示信息
+                import("@/components/toast").then(({ toast }) => {
+                  toast({
+                    type: "info",
+                    description: "由于长时间未活动（40分钟），您已被自动注销",
+                  });
+                });
+                
+                return; // 超时注销时不再触发全局事件
+              }
+              
               // 触发全局事件，通知所有组件更新用户状态
               window.dispatchEvent(new CustomEvent("sse_user_status_update", {
                 detail: {
                   member_id: statusData.member_id,
                   is_online: statusData.is_online,
+                  reason: statusData.reason,
                 },
               }));
             } catch (error) {
